@@ -1,18 +1,18 @@
-using System.IO;
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using HorizontalAlignment = System.Windows.HorizontalAlignment;
-using VerticalAlignment = System.Windows.VerticalAlignment;
-using Image = System.Windows.Controls.Image;
-using FontFamily = System.Windows.Media.FontFamily;
-using OddSnap.Models;
 using OddSnap.Helpers;
+using OddSnap.Models;
 using OddSnap.Native;
 using OddSnap.Services;
+using FontFamily = System.Windows.Media.FontFamily;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using Image = System.Windows.Controls.Image;
+using VerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace OddSnap.UI;
 

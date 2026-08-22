@@ -389,11 +389,16 @@ public static partial class UploadService
 
         using var client = new AsyncFtpClient(baseUri.Host, s.FtpUsername, s.FtpPassword ?? string.Empty, baseUri.Port > 0 ? baseUri.Port : 21, config);
         cancellationToken.ThrowIfCancellationRequested();
-        await client.Connect();
+        await client.Connect(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        await client.UploadFile(filePath, remotePath, FtpRemoteExists.Overwrite, createRemoteDir: true);
+        await client.UploadFile(
+            filePath,
+            remotePath,
+            FtpRemoteExists.Overwrite,
+            createRemoteDir: true,
+            token: cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        await client.Disconnect();
+        await client.Disconnect(cancellationToken);
 
         return new UploadResult
         {

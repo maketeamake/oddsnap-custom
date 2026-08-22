@@ -147,9 +147,9 @@ public static class OpenSourceTranslationRuntimeService
     private static Task<ProcessRunResult> RunPythonAsync(IEnumerable<string> arguments, CancellationToken cancellationToken, string? standardInput = null)
         => PythonRuntimeEnvironment.RunUtf8LauncherAsync(
             arguments,
-            cancellationToken,
             "translation.local.python-start",
-            standardInput);
+            standardInput,
+            cancellationToken);
 
     private static string GetPythonFailureMessage(ProcessRunResult result, string fallback)
     {

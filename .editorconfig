@@ -1,0 +1,48 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cs,csx}]
+end_of_line = crlf
+indent_style = space
+indent_size = 4
+tab_width = 4
+
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# Keep the recommended analyzer profile useful without turning subjective UI
+# style and micro-optimization suggestions into build failures.
+dotnet_diagnostic.CA1304.severity = suggestion
+dotnet_diagnostic.CA1305.severity = suggestion
+dotnet_diagnostic.CA1310.severity = suggestion
+dotnet_diagnostic.CA1311.severity = suggestion
+dotnet_diagnostic.CA1805.severity = suggestion
+dotnet_diagnostic.CA1822.severity = suggestion
+dotnet_diagnostic.CA1859.severity = suggestion
+dotnet_diagnostic.CA1861.severity = suggestion
+dotnet_diagnostic.CA1863.severity = suggestion
+dotnet_diagnostic.CA1865.severity = suggestion
+dotnet_diagnostic.CA2263.severity = suggestion
+
+[src/OddSnap.Tests/*.cs]
+# Underscores make xUnit scenario names readable in test output.
+dotnet_diagnostic.CA1707.severity = none
+
+[src/OddSnap/App.xaml.cs]
+# WPF Application owns these resources for its lifetime and releases them from
+# OnExit/App.Shutdown.cs; IDisposable is not part of the WPF Application model.
+dotnet_diagnostic.CA1001.severity = none
+
+[src/OddSnap/UI/{HistoryLibraryWindow.Editor.cs,OcrResultWindow.xaml.cs,SettingsWindow.xaml.cs,UpscaleResultWindow.xaml.cs}]
+# These WPF windows release owned resources from Closed/OnClosed. Implementing
+# IDisposable would add a second lifecycle that callers would not invoke.
+dotnet_diagnostic.CA1001.severity = none
+
+[*.{md,yml,yaml,json}]
+end_of_line = lf

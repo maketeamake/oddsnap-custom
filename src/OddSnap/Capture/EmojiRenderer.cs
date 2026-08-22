@@ -3,10 +3,10 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
-using Vortice.WIC;
 using Vortice.DXGI;
-using PixelFormat = Vortice.DCommon.PixelFormat;
+using Vortice.WIC;
 using AlphaMode = Vortice.DCommon.AlphaMode;
+using PixelFormat = Vortice.DCommon.PixelFormat;
 
 namespace OddSnap.Capture;
 

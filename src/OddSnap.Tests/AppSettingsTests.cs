@@ -1,6 +1,6 @@
-using OddSnap.Models;
-using OddSnap.Helpers;
 using System.Drawing;
+using OddSnap.Helpers;
+using OddSnap.Models;
 using Xunit;
 
 namespace OddSnap.Tests;

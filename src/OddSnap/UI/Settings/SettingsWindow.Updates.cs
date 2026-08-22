@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using OddSnap.Services;
 using Velopack;
 using Velopack.Sources;
-using OddSnap.Services;
 
 namespace OddSnap.UI;
 

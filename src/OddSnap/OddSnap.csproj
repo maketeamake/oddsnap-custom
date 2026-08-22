@@ -21,6 +21,7 @@
     <Description>Screenshot, annotation, OCR, sticker, and recording tool for Windows</Description>
     <RepositoryUrl>https://github.com/maketeamake/oddsnap-custom</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
     <StartupObject>OddSnap.App</StartupObject>
   </PropertyGroup>
 

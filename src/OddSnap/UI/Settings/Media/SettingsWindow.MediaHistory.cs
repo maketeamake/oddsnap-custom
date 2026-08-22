@@ -5,14 +5,14 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using HorizontalAlignment = System.Windows.HorizontalAlignment;
-using VerticalAlignment = System.Windows.VerticalAlignment;
-using Image = System.Windows.Controls.Image;
-using FontFamily = System.Windows.Media.FontFamily;
-using Cursors = System.Windows.Input.Cursors;
 using OddSnap.Helpers;
 using OddSnap.Models;
 using OddSnap.Services;
+using Cursors = System.Windows.Input.Cursors;
+using FontFamily = System.Windows.Media.FontFamily;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using Image = System.Windows.Controls.Image;
+using VerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace OddSnap.UI;
 

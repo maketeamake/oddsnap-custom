@@ -9,7 +9,9 @@ internal static class HistoryEntryUtilities
     public static string GetStablePathKey(string path)
     {
         var normalizedPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+#pragma warning disable CA5350 // Compatibility ID only; changing the hash would orphan existing history metadata.
         return Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(normalizedPath))).ToLowerInvariant();
+#pragma warning restore CA5350
     }
 
     public static bool IsSupportedHistoryFile(string path)

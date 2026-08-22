@@ -1,9 +1,9 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Diagnostics;
 using System.IO;
-using System.Windows;
 using System.Threading.Tasks;
+using System.Windows;
 using Microsoft.Win32;
 using OddSnap.Capture;
 using OddSnap.Models;

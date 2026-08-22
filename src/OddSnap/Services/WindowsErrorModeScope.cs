@@ -22,6 +22,6 @@ internal readonly struct WindowsErrorModeScope : IDisposable
 
     public void Dispose()
     {
-        Kernel32.SetErrorMode(_previousMode);
+        _ = Kernel32.SetErrorMode(_previousMode);
     }
 }

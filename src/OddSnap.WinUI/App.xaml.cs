@@ -11,7 +11,7 @@ public partial class App : Application
         InitializeComponent();
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs e)
+    protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window ??= new Window();
 
@@ -23,7 +23,7 @@ public partial class App : Application
         }
 
         if (rootFrame.Content is null)
-            _ = rootFrame.Navigate(typeof(MainPage), e.Arguments);
+            _ = rootFrame.Navigate(typeof(MainPage), args.Arguments);
 
         _window.Activate();
     }

@@ -5,9 +5,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using CaptureMode = OddSnap.Models.CaptureMode;
 using OddSnap.Models;
 using OddSnap.Services;
+using CaptureMode = OddSnap.Models.CaptureMode;
 
 namespace OddSnap.UI;
 
@@ -142,7 +142,7 @@ public partial class SettingsWindow : Window
         _imageSearchIndexService.Changed += ImageSearchIndexService_Changed;
         _imageSearchIndexService.StatusChanged += ImageSearchIndexService_StatusChanged;
         BackgroundRuntimeJobService.Changed += BackgroundRuntimeJobService_Changed;
-        _historyMonitorTimer.Tick += (_, _) => PollHistoryChanges();
+        _historyMonitorTimer.Tick += async (_, _) => await PollHistoryChangesAsync();
         _historyRefreshTimer.Tick += async (_, _) => await FlushQueuedHistoryRefreshAsync();
         _imageIndexRefreshTimer.Tick += (_, _) => FlushQueuedImageIndexRefresh();
         _imageSearchDebounceTimer.Tick += (_, _) => FlushQueuedImageSearchRefresh();
@@ -547,7 +547,7 @@ public partial class SettingsWindow : Window
         ApplyImageSearchFilter();
     }
 
-    private async void PollHistoryChanges()
+    private async Task PollHistoryChangesAsync()
     {
         if (!IsLoaded || _isClosed || HistoryTab.IsChecked != true || _deferHistoryMonitor || _historyLoadInProgress)
         {

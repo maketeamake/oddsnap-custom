@@ -16,16 +16,16 @@ using OddSnap.Services;
 using DrawingColor = System.Drawing.Color;
 using DrawingPoint = System.Drawing.Point;
 using DrawingRectangle = System.Drawing.Rectangle;
-using MediaColor = System.Windows.Media.Color;
-using MouseEventArgs = System.Windows.Input.MouseEventArgs;
-using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
-using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
-using WpfButton = System.Windows.Controls.Button;
-using WpfImage = System.Windows.Controls.Image;
-using WpfCursors = System.Windows.Input.Cursors;
-using MediaBrushes = System.Windows.Media.Brushes;
 using MediaBrush = System.Windows.Media.Brush;
+using MediaBrushes = System.Windows.Media.Brushes;
+using MediaColor = System.Windows.Media.Color;
+using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using ScreenshotCaptureMode = OddSnap.Models.CaptureMode;
+using WpfButton = System.Windows.Controls.Button;
+using WpfCursors = System.Windows.Input.Cursors;
+using WpfImage = System.Windows.Controls.Image;
+using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
 
 namespace OddSnap.UI;
 
@@ -1855,39 +1855,39 @@ public partial class HistoryLibraryWindow
                 AddPendingLineWithArrow(ruler.From, ruler.To, DrawingColor.FromArgb(255, 17, 24, 39), false);
                 break;
             case CurvedArrowAnnotation curved when curved.Points.Count > 1:
-            {
-                var polyline = new Polyline
                 {
-                    Stroke = ToMediaBrush(curved.Color),
-                    StrokeThickness = 4,
-                    StrokeLineJoin = PenLineJoin.Round,
-                    StrokeStartLineCap = PenLineCap.Round,
-                    StrokeEndLineCap = PenLineCap.Round
-                };
-                foreach (var point in curved.Points)
-                    polyline.Points.Add(ToInlineViewportPoint(point));
-                PendingAnnotationCanvas.Children.Add(polyline);
-                AddPendingArrowHead(
-                    ToInlineViewportPoint(curved.Points[^2]),
-                    ToInlineViewportPoint(curved.Points[^1]),
-                    curved.Color);
-                break;
-            }
+                    var polyline = new Polyline
+                    {
+                        Stroke = ToMediaBrush(curved.Color),
+                        StrokeThickness = 4,
+                        StrokeLineJoin = PenLineJoin.Round,
+                        StrokeStartLineCap = PenLineCap.Round,
+                        StrokeEndLineCap = PenLineCap.Round
+                    };
+                    foreach (var point in curved.Points)
+                        polyline.Points.Add(ToInlineViewportPoint(point));
+                    PendingAnnotationCanvas.Children.Add(polyline);
+                    AddPendingArrowHead(
+                        ToInlineViewportPoint(curved.Points[^2]),
+                        ToInlineViewportPoint(curved.Points[^1]),
+                        curved.Color);
+                    break;
+                }
             case DrawStroke draw when draw.Points.Count > 1:
-            {
-                var polyline = new Polyline
                 {
-                    Stroke = ToMediaBrush(draw.Color),
-                    StrokeThickness = 4,
-                    StrokeLineJoin = PenLineJoin.Round,
-                    StrokeStartLineCap = PenLineCap.Round,
-                    StrokeEndLineCap = PenLineCap.Round
-                };
-                foreach (var point in draw.Points)
-                    polyline.Points.Add(ToInlineViewportPoint(point));
-                PendingAnnotationCanvas.Children.Add(polyline);
-                break;
-            }
+                    var polyline = new Polyline
+                    {
+                        Stroke = ToMediaBrush(draw.Color),
+                        StrokeThickness = 4,
+                        StrokeLineJoin = PenLineJoin.Round,
+                        StrokeStartLineCap = PenLineCap.Round,
+                        StrokeEndLineCap = PenLineCap.Round
+                    };
+                    foreach (var point in draw.Points)
+                        polyline.Points.Add(ToInlineViewportPoint(point));
+                    PendingAnnotationCanvas.Children.Add(polyline);
+                    break;
+                }
             case HighlightAnnotation highlight:
                 AddPendingRect(highlight.Rect, ToMediaBrush(highlight.Color), null, 0, false);
                 break;
@@ -1914,57 +1914,57 @@ public partial class HistoryLibraryWindow
                     true);
                 break;
             case StepNumberAnnotation step:
-            {
-                var center = ToInlineViewportPoint(step.Pos);
-                const double size = 30;
-                var badge = new Ellipse { Width = size, Height = size, Fill = ToMediaBrush(step.Color) };
-                Canvas.SetLeft(badge, center.X - size / 2);
-                Canvas.SetTop(badge, center.Y - size / 2);
-                PendingAnnotationCanvas.Children.Add(badge);
-                var label = new TextBlock
                 {
-                    Text = step.Number.ToString(),
-                    Foreground = MediaBrushes.White,
-                    FontSize = 16,
-                    FontWeight = FontWeights.Bold,
-                    Width = size,
-                    TextAlignment = TextAlignment.Center
-                };
-                Canvas.SetLeft(label, center.X - size / 2);
-                Canvas.SetTop(label, center.Y - 10);
-                PendingAnnotationCanvas.Children.Add(label);
-                break;
-            }
+                    var center = ToInlineViewportPoint(step.Pos);
+                    const double size = 30;
+                    var badge = new Ellipse { Width = size, Height = size, Fill = ToMediaBrush(step.Color) };
+                    Canvas.SetLeft(badge, center.X - size / 2);
+                    Canvas.SetTop(badge, center.Y - size / 2);
+                    PendingAnnotationCanvas.Children.Add(badge);
+                    var label = new TextBlock
+                    {
+                        Text = step.Number.ToString(),
+                        Foreground = MediaBrushes.White,
+                        FontSize = 16,
+                        FontWeight = FontWeights.Bold,
+                        Width = size,
+                        TextAlignment = TextAlignment.Center
+                    };
+                    Canvas.SetLeft(label, center.X - size / 2);
+                    Canvas.SetTop(label, center.Y - 10);
+                    PendingAnnotationCanvas.Children.Add(label);
+                    break;
+                }
             case TextAnnotation text:
-            {
-                var pos = ToInlineViewportPoint(text.Pos);
-                var label = new TextBlock
                 {
-                    Text = text.Text,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = ToMediaBrush(text.Color),
-                    FontFamily = new System.Windows.Media.FontFamily(text.FontFamily),
-                    FontSize = Math.Max(1d, text.FontSize * (96d / 72d) * scale),
-                    FontWeight = text.Bold ? FontWeights.Bold : FontWeights.Normal,
-                    FontStyle = text.Italic ? FontStyles.Italic : FontStyles.Normal,
-                    Background = text.Background ? ToMediaBrush(text.Color) : MediaBrushes.Transparent
-                };
-                if (text.MaxWidth > 0)
-                    label.Width = Math.Max(40, text.MaxWidth * scale);
-                Canvas.SetLeft(label, pos.X);
-                Canvas.SetTop(label, pos.Y);
-                PendingAnnotationCanvas.Children.Add(label);
-                break;
-            }
+                    var pos = ToInlineViewportPoint(text.Pos);
+                    var label = new TextBlock
+                    {
+                        Text = text.Text,
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = ToMediaBrush(text.Color),
+                        FontFamily = new System.Windows.Media.FontFamily(text.FontFamily),
+                        FontSize = Math.Max(1d, text.FontSize * (96d / 72d) * scale),
+                        FontWeight = text.Bold ? FontWeights.Bold : FontWeights.Normal,
+                        FontStyle = text.Italic ? FontStyles.Italic : FontStyles.Normal,
+                        Background = text.Background ? ToMediaBrush(text.Color) : MediaBrushes.Transparent
+                    };
+                    if (text.MaxWidth > 0)
+                        label.Width = Math.Max(40, text.MaxWidth * scale);
+                    Canvas.SetLeft(label, pos.X);
+                    Canvas.SetTop(label, pos.Y);
+                    PendingAnnotationCanvas.Children.Add(label);
+                    break;
+                }
             case EmojiAnnotation emoji:
-            {
-                var pos = ToInlineViewportPoint(emoji.Pos);
-                var label = new TextBlock { Text = emoji.Emoji, FontSize = Math.Max(16, emoji.Size * scale) };
-                Canvas.SetLeft(label, pos.X);
-                Canvas.SetTop(label, pos.Y);
-                PendingAnnotationCanvas.Children.Add(label);
-                break;
-            }
+                {
+                    var pos = ToInlineViewportPoint(emoji.Pos);
+                    var label = new TextBlock { Text = emoji.Emoji, FontSize = Math.Max(16, emoji.Size * scale) };
+                    Canvas.SetLeft(label, pos.X);
+                    Canvas.SetTop(label, pos.Y);
+                    PendingAnnotationCanvas.Children.Add(label);
+                    break;
+                }
         }
     }
 

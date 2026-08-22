@@ -299,5 +299,7 @@ public sealed class LegacyHistoryMigratorTests : IDisposable
         {
             // Test cleanup must not mask the assertion result.
         }
+
+        GC.SuppressFinalize(this);
     }
 }

@@ -1,15 +1,15 @@
 using System.Collections.Concurrent;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows;
 using DrawingColor = System.Drawing.Color;
 using DrawingGraphics = System.Drawing.Graphics;
 using DrawingPixelFormat = System.Drawing.Imaging.PixelFormat;
 using DrawingRectangle = System.Drawing.Rectangle;
-using MediaColor = System.Windows.Media.Color;
 using MediaBrushes = System.Windows.Media.Brushes;
+using MediaColor = System.Windows.Media.Color;
 using MediaRect = System.Windows.Rect;
 
 namespace OddSnap.Helpers;

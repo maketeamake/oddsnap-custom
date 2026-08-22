@@ -11,8 +11,7 @@ internal static class HttpContentReader
         long maxBytes,
         CancellationToken cancellationToken = default)
     {
-        if (maxBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
 
         var contentLength = content.Headers.ContentLength;
         if (contentLength.HasValue && contentLength.Value > maxBytes)

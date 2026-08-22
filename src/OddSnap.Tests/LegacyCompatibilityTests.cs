@@ -94,5 +94,7 @@ public sealed class LegacyCompatibilityTests : IDisposable
         {
             // Test cleanup must not mask the assertion result.
         }
+
+        GC.SuppressFinalize(this);
     }
 }

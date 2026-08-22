@@ -33,10 +33,14 @@ utility functionality inherited from OddSnap.
 Requirements:
 
 - Windows 10 or Windows 11
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- The [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+  selected by `global.json`
 
 ```powershell
-dotnet restore OddSnap.sln
+dotnet restore OddSnap.sln --locked-mode
+dotnet format whitespace OddSnap.sln --verify-no-changes --no-restore
+dotnet format style OddSnap.sln --verify-no-changes --severity warn --no-restore
+dotnet format analyzers OddSnap.sln --verify-no-changes --severity warn --no-restore
 dotnet build OddSnap.sln -c Release --no-restore
 dotnet test src/OddSnap.Tests/OddSnap.Tests.csproj -c Release --no-build
 ```
@@ -62,3 +66,6 @@ The complete work is distributed under the
 [GNU General Public License v3.0 or later](LICENSE), as required by the upstream
 license. Copyright in upstream code remains with its original contributors;
 copyright in later modifications remains with their respective contributors.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the required quality checks and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.

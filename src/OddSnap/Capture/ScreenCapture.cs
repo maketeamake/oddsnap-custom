@@ -168,7 +168,7 @@ public static class ScreenCapture
             {
                 if (hdcDest != IntPtr.Zero)
                     graphics.ReleaseHdc(hdcDest);
-                User32.ReleaseDC(IntPtr.Zero, hdcScreen);
+                _ = User32.ReleaseDC(IntPtr.Zero, hdcScreen);
             }
 
             if (includeCursor)
@@ -206,7 +206,7 @@ public static class ScreenCapture
             {
                 if (hdcDest != IntPtr.Zero)
                     g.ReleaseHdc(hdcDest);
-                User32.ReleaseDC(IntPtr.Zero, hdcScreen);
+                _ = User32.ReleaseDC(IntPtr.Zero, hdcScreen);
             }
 
             if (includeCursor)
@@ -444,15 +444,14 @@ public static class ScreenCapture
 
             _disposed = true;
             if (_hdcScreen != IntPtr.Zero)
-                User32.ReleaseDC(IntPtr.Zero, _hdcScreen);
+                _ = User32.ReleaseDC(IntPtr.Zero, _hdcScreen);
             _graphics.Dispose();
             _bitmap.Dispose();
         }
 
         private void ThrowIfDisposed()
         {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(RecordingFrameCapturer));
+            ObjectDisposedException.ThrowIf(_disposed, this);
         }
     }
 }

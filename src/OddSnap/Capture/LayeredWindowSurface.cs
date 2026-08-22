@@ -46,7 +46,7 @@ internal static class LayeredWindowSurface
                 User32.DeleteObject(bitmapHandle);
             if (memoryDc != IntPtr.Zero)
                 User32.DeleteDC(memoryDc);
-            User32.ReleaseDC(IntPtr.Zero, screenDc);
+            _ = User32.ReleaseDC(IntPtr.Zero, screenDc);
         }
     }
 }

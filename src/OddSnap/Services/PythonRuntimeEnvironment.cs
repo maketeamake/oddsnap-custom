@@ -18,9 +18,9 @@ internal static class PythonRuntimeEnvironment
 
     public static Task<ProcessRunResult> RunUtf8LauncherAsync(
         IEnumerable<string> arguments,
-        CancellationToken cancellationToken,
         string diagnosticCategory,
-        string? standardInput = null)
+        string? standardInput,
+        CancellationToken cancellationToken)
         => ProcessRunner.RunAsync(
             "py",
             arguments,

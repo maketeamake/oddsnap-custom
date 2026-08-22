@@ -1,4 +1,3 @@
-using Bitmap = System.Drawing.Bitmap;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -11,6 +10,7 @@ using OddSnap.Capture;
 using OddSnap.Helpers;
 using OddSnap.Native;
 using OddSnap.Services;
+using Bitmap = System.Drawing.Bitmap;
 using Color = System.Windows.Media.Color;
 
 namespace OddSnap.UI;
@@ -724,7 +724,7 @@ public partial class ToastWindow : Window
         TogglePinned();
     }
 
-    private void SaveBtn_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private async void SaveBtn_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (!CanActivateMouseControl(sender))
         {
@@ -733,16 +733,16 @@ public partial class ToastWindow : Window
         }
 
         e.Handled = true;
-        SavePreview();
+        await SavePreviewAsync();
     }
 
-    private void SaveBtn_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private async void SaveBtn_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (!CanActivateKeyboardControl(sender, e))
             return;
 
         e.Handled = true;
-        SavePreview();
+        await SavePreviewAsync();
     }
 
     private static bool IsKeyboardActivateKey(System.Windows.Input.KeyEventArgs e) =>
@@ -758,7 +758,7 @@ public partial class ToastWindow : Window
 
     private void TogglePinned() => ApplyPinnedState(!_isPinned);
 
-    private async void SavePreview()
+    private async Task SavePreviewAsync()
     {
         if (_previewBitmap is null || _isSavingPreview)
             return;
@@ -983,15 +983,15 @@ public partial class ToastWindow : Window
     private void AddOpenWithMenuItem(System.Windows.Controls.ContextMenu menu, Action onInvoked)
     {
         var item = new System.Windows.Controls.MenuItem { Header = "Open with..." };
-        item.Click += (_, _) =>
+        item.Click += async (_, _) =>
         {
             onInvoked();
-            OpenPreviewWithWindowsPicker();
+            await OpenPreviewWithWindowsPickerAsync();
         };
         menu.Items.Add(item);
     }
 
-    private async void OpenPreviewWithWindowsPicker()
+    private async Task OpenPreviewWithWindowsPickerAsync()
     {
         if (_previewBitmap is null || !TryBeginOfficeAction())
             return;
@@ -1067,15 +1067,15 @@ public partial class ToastWindow : Window
             Header = $"Insert into {targetName}"
         };
 
-        item.Click += (_, _) =>
+        item.Click += async (_, _) =>
         {
             onInvoked();
-            SendPreviewToOffice(target);
+            await SendPreviewToOfficeAsync(target);
         };
         menu.Items.Add(item);
     }
 
-    private async void SendPreviewToOffice(Services.OfficeExportTarget target)
+    private async Task SendPreviewToOfficeAsync(Services.OfficeExportTarget target)
     {
         if (_previewBitmap is null || !TryBeginOfficeAction())
             return;

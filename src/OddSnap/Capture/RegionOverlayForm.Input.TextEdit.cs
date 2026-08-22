@@ -256,10 +256,10 @@ public sealed partial class RegionOverlayForm
             int end = index + 1;
             while (start > 0 && IsWordChar(_textBuffer[start - 1])) start--;
             while (end < _textBuffer.Length && IsWordChar(_textBuffer[end])) end++;
-        _textBox.SelectionStart = start;
-        _textBox.SelectionLength = end - start;
-        _textSelectionAnchor = start;
-        _textCaretIndex = end;
+            _textBox.SelectionStart = start;
+            _textBox.SelectionLength = end - start;
+            _textSelectionAnchor = start;
+            _textCaretIndex = end;
         }
 
         _textBox.Focus();

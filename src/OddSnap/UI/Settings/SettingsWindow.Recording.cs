@@ -1,8 +1,8 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using OddSnap.Models;
 using OddSnap.Helpers;
+using OddSnap.Models;
 using OddSnap.Services;
 
 namespace OddSnap.UI;

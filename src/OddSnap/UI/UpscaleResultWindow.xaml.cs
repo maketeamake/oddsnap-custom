@@ -1,15 +1,15 @@
 using System.Drawing;
-using System.Windows.Media;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using OddSnap.Helpers;
 using OddSnap.Services;
-using MouseEventArgs = System.Windows.Input.MouseEventArgs;
-using KeyEventArgs = System.Windows.Input.KeyEventArgs;
-using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
-using MouseButton = System.Windows.Input.MouseButton;
 using Key = System.Windows.Input.Key;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using MouseButton = System.Windows.Input.MouseButton;
+using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
 namespace OddSnap.UI;
 

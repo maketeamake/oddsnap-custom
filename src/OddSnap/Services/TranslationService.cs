@@ -1,5 +1,5 @@
-using System.IO;
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 
@@ -387,9 +387,9 @@ public static class TranslationService
     private static Task<ProcessRunResult> RunPythonAsync(IEnumerable<string> arguments, CancellationToken cancellationToken, string? standardInput = null)
         => PythonRuntimeEnvironment.RunUtf8LauncherAsync(
             arguments,
-            cancellationToken,
             "translation.python.start",
-            standardInput);
+            standardInput,
+            cancellationToken);
 
     private static HttpClient CreateGoogleHttpClient()
     {

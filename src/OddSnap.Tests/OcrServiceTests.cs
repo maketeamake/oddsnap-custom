@@ -1,5 +1,5 @@
-using OddSnap.Services;
 using System.Text;
+using OddSnap.Services;
 using Xunit;
 
 namespace OddSnap.Tests;

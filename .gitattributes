@@ -1,0 +1,32 @@
+* text=auto
+
+# Windows/.NET source files use CRLF in the working tree.
+*.cs text eol=crlf
+*.csx text eol=crlf
+*.csproj text eol=crlf
+*.props text eol=crlf
+*.targets text eol=crlf
+*.sln text eol=crlf
+*.xaml text eol=crlf
+*.resx text eol=crlf
+*.ps1 text eol=crlf
+
+# Repository metadata stays portable across GitHub and Unix tooling.
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Never apply text conversions to binary assets.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.wav binary
+*.mp3 binary

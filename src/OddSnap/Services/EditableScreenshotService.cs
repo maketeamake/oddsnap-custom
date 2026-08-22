@@ -148,14 +148,29 @@ public static class EditableScreenshotService
         EraserFill a => StoredAnnotation.RectEntry("eraser", a.Rect, a.Color),
         TextAnnotation a => new()
         {
-            Kind = "text", X1 = a.Pos.X, Y1 = a.Pos.Y, Text = a.Text, Size = a.FontSize,
-            ColorArgb = a.Color.ToArgb(), Bold = a.Bold, Italic = a.Italic, Stroke = a.Stroke,
-            Shadow = a.Shadow, Background = a.Background, FontFamily = a.FontFamily, Width = a.MaxWidth
+            Kind = "text",
+            X1 = a.Pos.X,
+            Y1 = a.Pos.Y,
+            Text = a.Text,
+            Size = a.FontSize,
+            ColorArgb = a.Color.ToArgb(),
+            Bold = a.Bold,
+            Italic = a.Italic,
+            Stroke = a.Stroke,
+            Shadow = a.Shadow,
+            Background = a.Background,
+            FontFamily = a.FontFamily,
+            Width = a.MaxWidth
         },
         MagnifierAnnotation a => new()
         {
-            Kind = "magnifier", X1 = a.Pos.X, Y1 = a.Pos.Y,
-            X2 = a.SrcRect.X, Y2 = a.SrcRect.Y, Width = a.SrcRect.Width, Height = a.SrcRect.Height
+            Kind = "magnifier",
+            X1 = a.Pos.X,
+            Y1 = a.Pos.Y,
+            X2 = a.SrcRect.X,
+            Y2 = a.SrcRect.Y,
+            Width = a.SrcRect.Width,
+            Height = a.SrcRect.Height
         },
         EmojiAnnotation a => new() { Kind = "emoji", X1 = a.Pos.X, Y1 = a.Pos.Y, Text = a.Emoji, Size = a.Size },
         LineAnnotation a => StoredAnnotation.LineEntry("line", a.From, a.To, a.Color),

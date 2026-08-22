@@ -12,9 +12,9 @@ using System.Windows.Threading;
 using OddSnap.Capture;
 using OddSnap.Helpers;
 using OddSnap.Services;
-using ScreenshotCaptureMode = OddSnap.Models.CaptureMode;
 using Image = System.Windows.Controls.Image;
 using ListBox = System.Windows.Controls.ListBox;
+using ScreenshotCaptureMode = OddSnap.Models.CaptureMode;
 
 namespace OddSnap.UI;
 

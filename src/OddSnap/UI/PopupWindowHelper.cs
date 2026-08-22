@@ -1,6 +1,6 @@
 using System.Windows;
-using System.Windows.Interop;
 using System.Windows.Forms;
+using System.Windows.Interop;
 using OddSnap.Models;
 using OddSnap.Native;
 
@@ -27,7 +27,7 @@ internal static class PopupWindowHelper
         int exStyle = Native.User32.GetWindowLongA(hwnd, Native.User32.GWL_EXSTYLE);
         exStyle |= 0x80; // WS_EX_TOOLWINDOW
         exStyle |= 0x08000000; // WS_EX_NOACTIVATE
-        Native.User32.SetWindowLongA(hwnd, Native.User32.GWL_EXSTYLE, exStyle);
+        _ = Native.User32.SetWindowLongA(hwnd, Native.User32.GWL_EXSTYLE, exStyle);
         Native.Dwm.DisableBackdrop(hwnd);
     }
 

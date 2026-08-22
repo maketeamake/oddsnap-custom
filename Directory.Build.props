@@ -1,5 +1,10 @@
 <Project>
   <PropertyGroup>
+    <AnalysisLevel>latest-Recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestoreDisableParallel>true</RestoreDisableParallel>
   </PropertyGroup>
 </Project>

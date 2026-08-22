@@ -1,9 +1,9 @@
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using DrawingPixelFormat = System.Drawing.Imaging.PixelFormat;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using DrawingPixelFormat = System.Drawing.Imaging.PixelFormat;
 
 namespace OddSnap.Helpers;
 

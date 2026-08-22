@@ -75,8 +75,9 @@ Hard rules for new/modified UI:
 
 - `src/OddSnap.Tests` covers pure logic (settings normalization, filename
   templates, localization fallback, history utilities, hotkey formatting,
-  upload validation). CI runs it on every push/PR (`build.yml`,
-  `build-and-test` job).
+  upload validation). CI runs formatting, the recommended .NET analyzer
+  profile, dependency auditing, a warnings-as-errors Release build, and the
+  test suite on every push/PR (`build.yml`, `build-and-test` job).
 - Tests must never: open windows, register global hotkeys, capture the
   screen, touch the network, or write outside the temp directory. The user's
   real settings/history under AppData are off-limits.

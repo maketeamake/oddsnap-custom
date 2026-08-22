@@ -514,7 +514,7 @@ public partial class PreviewWindow
         TogglePinned();
     }
 
-    private void SaveClick(object sender, MouseButtonEventArgs e)
+    private async void SaveClick(object sender, MouseButtonEventArgs e)
     {
         if (!CanActivateMouseControl(sender))
         {
@@ -523,16 +523,16 @@ public partial class PreviewWindow
         }
 
         e.Handled = true;
-        SavePreview();
+        await SavePreviewAsync();
     }
 
-    private void SaveBtn_KeyDown(object sender, WpfKeyEventArgs e)
+    private async void SaveBtn_KeyDown(object sender, WpfKeyEventArgs e)
     {
         if (!CanActivateKeyboardControl(sender, e))
             return;
 
         e.Handled = true;
-        SavePreview();
+        await SavePreviewAsync();
     }
 
     private static bool IsKeyboardActivateKey(WpfKeyEventArgs e) =>
@@ -575,7 +575,7 @@ public partial class PreviewWindow
         }
     }
 
-    private async void SavePreview()
+    private async Task SavePreviewAsync()
     {
         if (_isSavingPreview || _isFading)
             return;

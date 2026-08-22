@@ -69,12 +69,14 @@ public sealed class ReportedIssueRegressionTests : IDisposable
         var cleanupCalled = false;
         var reportCalled = false;
 
+#pragma warning disable CA2201 // The regression test must reproduce the native COM failure precisely.
         var shown = ToastWindow.TryShowWithCompositionFallback(
             () => throw new COMException(
                 "Desktop composition is disabled.",
                 unchecked((int)0x80263001)),
             () => cleanupCalled = true,
             _ => reportCalled = true);
+#pragma warning restore CA2201
 
         Assert.False(shown);
         Assert.True(cleanupCalled);
@@ -200,5 +202,7 @@ public sealed class ReportedIssueRegressionTests : IDisposable
         {
             // Test cleanup must not mask assertion failures.
         }
+
+        GC.SuppressFinalize(this);
     }
 }

@@ -3,8 +3,8 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.IO;
 using System.Windows.Forms;
-using OddSnap.Native;
 using OddSnap.Helpers;
+using OddSnap.Native;
 using OddSnap.Services;
 
 namespace OddSnap.Capture;

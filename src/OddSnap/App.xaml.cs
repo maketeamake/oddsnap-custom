@@ -1,8 +1,8 @@
 using System.Windows;
 using System.Windows.Threading;
-using Velopack;
 using OddSnap.Services;
 using OddSnap.UI;
+using Velopack;
 
 namespace OddSnap;
 
