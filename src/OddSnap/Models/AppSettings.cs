@@ -1,0 +1,383 @@
+namespace OddSnap.Models;
+
+public enum AfterCaptureAction
+{
+    CopyToClipboard,
+    PreviewAndCopy,
+    PreviewOnly
+}
+
+public enum ToastPosition
+{
+    Right,
+    Left,
+    TopLeft,
+    TopRight
+}
+
+public enum ToastButtonSlot
+{
+    TopLeft,
+    TopInnerLeft,
+    TopInnerRight,
+    TopRight,
+    BottomLeft,
+    BottomInnerLeft,
+    BottomInnerRight,
+    BottomRight
+}
+
+public enum SoundPack
+{
+    Default,
+    Soft,
+    Retro
+}
+
+public enum RecordingFormat
+{
+    GIF,
+    MP4,
+    WebM,
+    MKV
+}
+
+public enum RecordingQuality
+{
+    Original,
+    P1080,
+    P720,
+    P480
+}
+
+public enum HistoryRetentionPeriod
+{
+    Never,
+    OneDay,
+    SevenDays,
+    ThirtyDays,
+    NinetyDays
+}
+
+public enum CaptureImageFormat
+{
+    Png,
+    Jpeg,
+    Bmp
+}
+
+public enum WindowDetectionMode
+{
+    Off,
+    WindowOnly
+}
+
+public enum TrayIconAction
+{
+    AreaCapture,
+    History,
+    FullScreenCapture,
+    Record,
+    ScrollCapture,
+    Settings,
+    Menu,
+    None
+}
+
+public enum CaptureDockSide
+{
+    Top,
+    Bottom,
+    Left,
+    Right
+}
+
+public enum CenterSelectionAspectRatio
+{
+    Free,
+    Square,
+    Widescreen16x9,
+    Classic4x3,
+    Photo3x2,
+    Portrait9x16
+}
+
+public enum ScrollingCaptureMode
+{
+    Automatic,
+    Manual
+}
+
+[Flags]
+public enum ImageSearchSourceOptions
+{
+    None = 0,
+    FileName = 1 << 0,
+    Ocr = 1 << 1,
+    Metadata = 1 << 2,
+    OcrText = Ocr,
+    All = FileName | Ocr | Metadata
+}
+
+public sealed class AppSettings
+{
+    public const string DefaultFileNameTemplate = "{year}-{month}-{day}-{hour}-{min}-{sec}-{rand}";
+    public const double DefaultUiScale = 1.0;
+    public const double MinUiScale = 0.8;
+    public const double MaxUiScale = 1.4;
+
+    public static double NormalizeUiScale(double scale)
+        => Math.Clamp(double.IsFinite(scale) ? scale : DefaultUiScale, MinUiScale, MaxUiScale);
+
+    public sealed class ToastButtonLayoutSettings
+    {
+        public bool ShowClose { get; set; } = true;
+        public ToastButtonSlot CloseSlot { get; set; } = ToastButtonSlot.TopRight;
+        public bool ShowPin { get; set; } = true;
+        public ToastButtonSlot PinSlot { get; set; } = ToastButtonSlot.TopLeft;
+        public bool ShowSave { get; set; } = true;
+        public ToastButtonSlot SaveSlot { get; set; } = ToastButtonSlot.BottomRight;
+        public bool ShowOffice { get; set; }
+        public ToastButtonSlot OfficeSlot { get; set; } = ToastButtonSlot.TopInnerLeft;
+        public bool ShowAiRedirect { get; set; } = true;
+        public ToastButtonSlot AiRedirectSlot { get; set; } = ToastButtonSlot.BottomLeft;
+        public bool ShowDelete { get; set; }
+        public ToastButtonSlot DeleteSlot { get; set; } = ToastButtonSlot.BottomLeft;
+    }
+
+    public uint HotkeyModifiers { get; set; } = Native.User32.MOD_ALT;
+    public uint HotkeyKey { get; set; } = 0xC0; // VK_OEM_3 = backtick/tilde
+
+    // OCR hotkey: Alt+Shift+`
+    public uint OcrHotkeyModifiers { get; set; } = Native.User32.MOD_ALT | Native.User32.MOD_SHIFT;
+    public uint OcrHotkeyKey { get; set; } = 0xC0;
+    public string OcrLanguageTag { get; set; } = "auto";
+    public int OcrModelQuality { get; set; } // 0 = Fast (~1 MB), 1 = Standard (~4 MB)
+    public string OcrDefaultTranslateFrom { get; set; } = "auto";
+    public string OcrDefaultTranslateTo { get; set; } = "auto";
+    public bool OcrAutoCopyToClipboard { get; set; }
+    public string? GoogleTranslateApiKey { get; set; }
+    public bool TranslationRuntimeInstalled { get; set; }
+    public int TranslationModel { get; set; } = 2; // 0 = Argos, 1 = Google, 2 = Open-source local
+    public bool AnnotationStrokeShadow { get; set; } = true;
+
+    // Color picker hotkey: Alt+C
+    public uint PickerHotkeyModifiers { get; set; } = Native.User32.MOD_ALT;
+    public uint PickerHotkeyKey { get; set; } = 0x43; // VK_C
+
+    // Optional custom-tool hotkeys (disabled by default)
+    public uint ScanHotkeyModifiers { get; set; }
+    public uint ScanHotkeyKey { get; set; }
+    public uint StickerHotkeyModifiers { get; set; }
+    public uint StickerHotkeyKey { get; set; }
+    public uint UpscaleHotkeyModifiers { get; set; }
+    public uint UpscaleHotkeyKey { get; set; }
+    public uint CenterHotkeyModifiers { get; set; }
+    public uint CenterHotkeyKey { get; set; }
+    public uint FullscreenHotkeyModifiers { get; set; }
+    public uint FullscreenHotkeyKey { get; set; }
+    public uint ActiveWindowHotkeyModifiers { get; set; }
+    public uint ActiveWindowHotkeyKey { get; set; }
+    public uint RulerHotkeyModifiers { get; set; }
+    public uint RulerHotkeyKey { get; set; }
+
+    // Scrolling capture hotkey (disabled by default)
+    public uint ScrollCaptureHotkeyModifiers { get; set; }
+    public uint ScrollCaptureHotkeyKey { get; set; }
+
+    // GIF recording hotkey (disabled by default)
+    public uint GifHotkeyModifiers { get; set; }
+    public uint GifHotkeyKey { get; set; }
+    public int GifFps { get; set; } = 15;
+
+    public AfterCaptureAction AfterCapture { get; set; } = AfterCaptureAction.PreviewAndCopy;
+    public bool SaveToFile { get; set; } = true;
+    public bool AskForFileNameOnSave { get; set; }
+    public string FileNameTemplate { get; set; } = DefaultFileNameTemplate;
+    public CaptureImageFormat CaptureImageFormat { get; set; } = CaptureImageFormat.Png;
+    public bool StyleScreenshots { get; set; }
+    public bool AddScreenshotShadow { get; set; }
+    public bool AddScreenshotStroke { get; set; }
+    public int CaptureMaxLongEdge { get; set; }
+    public string SaveDirectory { get; set; } = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "OddSnap");
+    public bool SaveInMonthlyFolders { get; set; } = true;
+    public bool StartWithWindows { get; set; } = true;
+    public bool CreateStartMenuShortcut { get; set; } = true;
+    public TrayIconAction TrayLeftClickAction { get; set; } = TrayIconAction.History;
+    // Custom builds keep upstream auto-update off by default so local changes are not overwritten.
+    public bool AutoCheckForUpdates { get; set; }
+    public CaptureMode LastCaptureMode { get; set; } = CaptureMode.Rectangle;
+    public WindowDetectionMode WindowDetection { get; set; } = WindowDetectionMode.WindowOnly;
+    public CaptureDockSide CaptureDockSide { get; set; } = CaptureDockSide.Top;
+    public ScrollingCaptureMode ScrollingCaptureMode { get; set; } = ScrollingCaptureMode.Automatic;
+    public int CaptureDelaySeconds { get; set; }
+    public bool SaveHistory { get; set; } = true;
+    public bool MuteSounds { get; set; }
+    public bool DisableAnimations { get; set; }
+    public double UiScale { get; set; } = DefaultUiScale;
+    public string InterfaceLanguage { get; set; } = "auto";
+    public bool ShowCrosshairGuides { get; set; } // off by default
+    public bool ShowCursor { get; set; }
+    public bool ShowOddSnapUiInScreenshots { get; set; } = true;
+    public bool HdrCaptureCompatibleMode { get; set; }
+    public bool ShowCaptureMagnifier { get; set; } = true;
+    public bool OverlayCaptureAllMonitors { get; set; } = true;
+    public bool DetectWindows { get; set; } = true;
+    public bool CompressHistory { get; set; }
+    public int JpegQuality { get; set; } = 85;
+    public bool HasCompletedSetup { get; set; }
+    public ToastPosition ToastPosition { get; set; } = ToastPosition.Right;
+    public CaptureMode DefaultCaptureMode { get; set; } = CaptureMode.Rectangle;
+    public CenterSelectionAspectRatio CenterSelectionAspectRatio { get; set; } = CenterSelectionAspectRatio.Free;
+    public bool ShowToolNumberBadges { get; set; } = true;
+    public HistoryRetentionPeriod HistoryRetention { get; set; } = HistoryRetentionPeriod.Never;
+    public ImageSearchSourceOptions ImageSearchSources { get; set; } = ImageSearchSourceOptions.All;
+    public bool ShowImageSearchBar { get; set; } = true;
+    public bool ImageSearchExactMatch { get; set; }
+    public bool ShowImageSearchDiagnostics { get; set; }
+    public bool AutoIndexImages { get; set; } = true;
+    public int LastCaptureRegionX { get; set; }
+    public int LastCaptureRegionY { get; set; }
+    public int LastCaptureRegionWidth { get; set; }
+    public int LastCaptureRegionHeight { get; set; }
+    // Upload settings
+    public bool AutoUploadScreenshots { get; set; } = true;
+    public bool AutoUploadGifs { get; set; }
+    public bool AutoUploadVideos { get; set; }
+    public Services.UploadDestination ImageUploadDestination { get; set; } = Services.UploadDestination.None;
+    public uint AiRedirectHotkeyModifiers { get; set; }
+    public uint AiRedirectHotkeyKey { get; set; }
+    public Services.UploadSettings ImageUploadSettings { get; set; } = new();
+    public Services.StickerSettings StickerUploadSettings { get; set; } = new();
+    public Services.UpscaleSettings UpscaleUploadSettings { get; set; } = new();
+
+    public double ToastDurationSeconds { get; set; } = 2.5;
+    public bool ToastFadeOutEnabled { get; set; }
+    public double ToastFadeOutSeconds { get; set; } = 1.0;
+    public bool AutoPinPreviews { get; set; }
+    public ToastButtonLayoutSettings ToastButtons { get; set; } = new();
+    public Dictionary<string, string> OpenWithApps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public SoundPack SoundPack { get; set; } = SoundPack.Default;
+
+    // Video recording
+    public RecordingFormat RecordingFormat { get; set; } = RecordingFormat.MP4;
+    public RecordingQuality RecordingQuality { get; set; } = RecordingQuality.Original;
+    public int RecordingFps { get; set; } = 60;
+    public bool RecordMicrophone { get; set; }
+    public bool RecordDesktopAudio { get; set; } = true;
+    public string? MicrophoneDeviceId { get; set; }
+    public string? DesktopAudioDeviceId { get; set; }
+
+    // Toolbar customization: which tools appear in the dock
+    // null = all tools enabled (default). List of tool IDs from ToolDef.AllTools.
+    public List<string>? EnabledTools { get; set; }
+
+    // Toolbar layout customization: item order and which items stay pinned on the toolbar.
+    // null = default order/pins. IDs come from ToolDef.AllToolbarItems().
+    public List<string>? ToolbarToolOrderIds { get; set; }
+    public List<string>? ToolbarPinnedToolIds { get; set; }
+
+    // Generic hotkeys for any tool by ID. Key = tool id, Value = [modifiers, virtualKey].
+    // Tools with dedicated properties (rect, ocr, picker, etc.) are mapped to those properties instead.
+    public Dictionary<string, uint[]>? ToolHotkeys { get; set; }
+
+    // Virtual key codes for in-capture annotation shortcuts: 1-9, 0, -, =, [, ]
+    private static readonly uint[] AnnotationKeyVks =
+    {
+        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, // 1-9
+        0x30, 0xBD, 0xBB, 0xDB, 0xDD, 0xDC // 0, -, =, [, ], \
+    };
+
+    /// <summary>Compute annotation tool defaults from stable tool order.</summary>
+    private Dictionary<string, uint> GetAnnotationDefaults()
+    {
+        var result = new Dictionary<string, uint>();
+        int idx = 0;
+        foreach (var t in ToolDef.AllTools.Where(t => t.Group == 1))
+        {
+            if (idx < AnnotationKeyVks.Length)
+                result[t.Id] = AnnotationKeyVks[idx++];
+        }
+        return result;
+    }
+
+    /// <summary>Get hotkey (mod, key) for a tool ID, checking named properties first then dictionary.</summary>
+    public (uint mod, uint key) GetToolHotkey(string toolId) => toolId switch
+    {
+        "rect" => (HotkeyModifiers, HotkeyKey),
+        "ocr" => (OcrHotkeyModifiers, OcrHotkeyKey),
+        "picker" => (PickerHotkeyModifiers, PickerHotkeyKey),
+        "scan" => (ScanHotkeyModifiers, ScanHotkeyKey),
+        "sticker" => (StickerHotkeyModifiers, StickerHotkeyKey),
+        "upscale" => (UpscaleHotkeyModifiers, UpscaleHotkeyKey),
+        "center" => (CenterHotkeyModifiers, CenterHotkeyKey),
+        "_fullscreen" => (FullscreenHotkeyModifiers, FullscreenHotkeyKey),
+        "_activeWindow" => (ActiveWindowHotkeyModifiers, ActiveWindowHotkeyKey),
+        "_scrollCapture" => (ScrollCaptureHotkeyModifiers, ScrollCaptureHotkeyKey),
+        "_record" => (GifHotkeyModifiers, GifHotkeyKey),
+        _ => GetGenericToolHotkey(toolId),
+    };
+
+    private (uint mod, uint key) GetGenericToolHotkey(string toolId)
+    {
+        // Check user-customized value first (including explicit clears stored as [0,0])
+        if (ToolHotkeys != null && ToolHotkeys.TryGetValue(toolId, out var v) && v is { Length: >= 2 })
+            return (v[0], v[1]);
+        if (ToolDef.AllTools.Any(t => t.Id == toolId && t.Group == 1) &&
+            EnabledTools is { Count: > 0 } &&
+            !EnabledTools.Contains(toolId))
+            return (0u, 0u);
+        // Fall back to stable annotation tool defaults.
+        var defaults = GetAnnotationDefaults();
+        if (defaults.TryGetValue(toolId, out var defKey))
+            return (0u, defKey);
+        return (0u, 0u);
+    }
+
+    /// <summary>Set hotkey (mod, key) for a tool ID.</summary>
+    public void SetToolHotkey(string toolId, uint mod, uint key)
+    {
+        switch (toolId)
+        {
+            case "rect": HotkeyModifiers = mod; HotkeyKey = key; break;
+            case "ocr": OcrHotkeyModifiers = mod; OcrHotkeyKey = key; break;
+            case "picker": PickerHotkeyModifiers = mod; PickerHotkeyKey = key; break;
+            case "scan": ScanHotkeyModifiers = mod; ScanHotkeyKey = key; break;
+            case "sticker": StickerHotkeyModifiers = mod; StickerHotkeyKey = key; break;
+            case "upscale": UpscaleHotkeyModifiers = mod; UpscaleHotkeyKey = key; break;
+            case "center": CenterHotkeyModifiers = mod; CenterHotkeyKey = key; break;
+            // ruler handled by generic path (annotation tool with default key 9)
+            case "_fullscreen": FullscreenHotkeyModifiers = mod; FullscreenHotkeyKey = key; break;
+            case "_activeWindow": ActiveWindowHotkeyModifiers = mod; ActiveWindowHotkeyKey = key; break;
+            case "_scrollCapture": ScrollCaptureHotkeyModifiers = mod; ScrollCaptureHotkeyKey = key; break;
+            case "_record": GifHotkeyModifiers = mod; GifHotkeyKey = key; break;
+            default:
+                ToolHotkeys ??= new(StringComparer.OrdinalIgnoreCase);
+                ToolHotkeys[toolId] = new[] { mod, key };
+                break;
+        }
+    }
+
+    public string? FindAnnotationToolId(uint mod, uint key, IEnumerable<string>? visibleToolIds = null)
+    {
+        if (key == 0)
+            return null;
+
+        HashSet<string>? visible = visibleToolIds != null
+            ? new HashSet<string>(visibleToolIds, StringComparer.OrdinalIgnoreCase)
+            : null;
+
+        foreach (var tool in ToolDef.AllTools.Where(t => t.Group == 1))
+        {
+            if (visible != null && !visible.Contains(tool.Id))
+                continue;
+
+            var hotkey = GetToolHotkey(tool.Id);
+            if (hotkey.mod == mod && hotkey.key == key)
+                return tool.Id;
+        }
+
+        return null;
+    }
+}

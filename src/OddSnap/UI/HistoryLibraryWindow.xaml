@@ -1,0 +1,470 @@
+<Window x:Class="OddSnap.UI.HistoryLibraryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OddSnap Library" Width="1220" Height="780" MinWidth="860" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource ThemeInputBackgroundBrush}"
+        Foreground="{DynamicResource ThemeTextPrimaryBrush}"
+        PreviewKeyDown="HistoryLibraryWindow_PreviewKeyDown">
+    <Window.Resources>
+        <Style x:Key="LibraryButton" TargetType="Button">
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Setter Property="Background" Value="{DynamicResource ThemeInputBackgroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeInputBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style x:Key="LibraryToolButton" TargetType="Button" BasedOn="{StaticResource LibraryButton}">
+            <Setter Property="Padding" Value="6"/>
+            <Setter Property="Margin" Value="3,0,0,0"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="MinWidth" Value="36"/>
+            <Setter Property="Width" Value="36"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Background" Value="#FFE5E7EB"/>
+            <Setter Property="Foreground" Value="#FF111827"/>
+            <Setter Property="BorderBrush" Value="#FF9CA3AF"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+        </Style>
+        <Style x:Key="LibraryPresetButton" TargetType="Button" BasedOn="{StaticResource LibraryToolButton}">
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="MinWidth" Value="18"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+        <Style x:Key="LibraryFilterList" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        </Style>
+        <Style x:Key="LibraryFilterItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="Margin" Value="0,1"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="ToolTip" Value="{Binding ToolTip}"/>
+        </Style>
+        <Style x:Key="FilmstripItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="3,2"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+        </Style>
+        <Style x:Key="FilmstripScrollBar" TargetType="ScrollBar">
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="MinHeight" Value="18"/>
+            <Setter Property="Background" Value="#FF30343B"/>
+            <Setter Property="Foreground" Value="#FF9CA3AF"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="2">
+                            <Track x:Name="PART_Track" Orientation="Horizontal"
+                                   IsDirectionReversed="False"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Value="{TemplateBinding Value}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageLeftCommand"
+                                                  Background="Transparent" BorderThickness="0"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb MinWidth="54" Cursor="Hand">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#FF9CA3AF" BorderBrush="#FFD1D5DB"
+                                                        BorderThickness="1" CornerRadius="5"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageRightCommand"
+                                                  Background="Transparent" BorderThickness="0"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Border Background="{DynamicResource ThemeInputBackgroundBrush}"
+                    BorderBrush="{DynamicResource ThemeInputBorderBrush}"
+                    BorderThickness="1" CornerRadius="7" Padding="10,6">
+                <Grid>
+                    <TextBox x:Name="SearchBox" BorderThickness="0" Background="Transparent"
+                             Foreground="{DynamicResource ThemeTextPrimaryBrush}"
+                             FontSize="13" TextChanged="SearchBox_TextChanged"
+                             ToolTip="Search OCR text, application, window title, tags, or file name"/>
+                    <TextBlock x:Name="SearchPlaceholder" Text="Search screenshots..."
+                               IsHitTestVisible="False" Opacity="0.35" VerticalAlignment="Center" FontSize="12"/>
+                </Grid>
+            </Border>
+            <Border Grid.Column="1" Margin="8,0,0,0" Padding="4" CornerRadius="8"
+                    Background="#FFD1D5DB"
+                    BorderBrush="#FF9CA3AF" BorderThickness="1"
+                    HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="SelectToolButton" Style="{StaticResource LibraryToolButton}" Click="SelectTool_Click" ToolTip="Select and move annotations"/>
+                <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
+                    <Button x:Name="ArrowToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="ArrowTool_Click" ToolTip="Draw an arrow"/>
+                    <Button x:Name="ArrowPresetButton" Style="{StaticResource LibraryPresetButton}" Click="ArrowPresetButton_Click" Content="▾" ToolTip="Arrow color presets">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="●  Red" Tag="#FFFF3B30" Click="ArrowColorPreset_Click"/>
+                                <MenuItem Header="●  Yellow" Tag="#FFFFCC00" Click="ArrowColorPreset_Click"/>
+                                <MenuItem Header="●  Green" Tag="#FF34C759" Click="ArrowColorPreset_Click"/>
+                                <MenuItem Header="●  Blue" Tag="#FF007AFF" Click="ArrowColorPreset_Click"/>
+                                <MenuItem Header="●  Purple" Tag="#FFAF52DE" Click="ArrowColorPreset_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
+                    <Button x:Name="DrawToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="DrawTool_Click" ToolTip="Draw freehand"/>
+                    <Button x:Name="DrawPresetButton" Style="{StaticResource LibraryPresetButton}" Click="DrawPresetButton_Click" Content="▾" ToolTip="Pencil color presets">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="●  Red" Tag="#FFFF3B30" Click="DrawColorPreset_Click"/>
+                                <MenuItem Header="●  Yellow" Tag="#FFFFCC00" Click="DrawColorPreset_Click"/>
+                                <MenuItem Header="●  Green" Tag="#FF34C759" Click="DrawColorPreset_Click"/>
+                                <MenuItem Header="●  Blue" Tag="#FF007AFF" Click="DrawColorPreset_Click"/>
+                                <MenuItem Header="●  Purple" Tag="#FFAF52DE" Click="DrawColorPreset_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
+                    <Button x:Name="HighlightToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="HighlightTool_Click" ToolTip="Highlight an area"/>
+                    <Button x:Name="HighlightPresetButton" Style="{StaticResource LibraryPresetButton}" Click="HighlightPresetButton_Click" Content="▾" ToolTip="Highlight color presets">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="●  Red" Tag="#FFFF3B30" Click="HighlightColorPreset_Click"/>
+                                <MenuItem Header="●  Yellow" Tag="#FFFFCC00" Click="HighlightColorPreset_Click"/>
+                                <MenuItem Header="●  Green" Tag="#FF34C759" Click="HighlightColorPreset_Click"/>
+                                <MenuItem Header="●  Blue" Tag="#FF007AFF" Click="HighlightColorPreset_Click"/>
+                                <MenuItem Header="●  Purple" Tag="#FFAF52DE" Click="HighlightColorPreset_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
+                    <Button x:Name="TextToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="TextTool_Click" ToolTip="Add or edit text (T)"/>
+                    <Button x:Name="TextPresetButton" Style="{StaticResource LibraryPresetButton}" Click="TextPresetButton_Click" Content="▾" ToolTip="Text size presets">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Small — red (18 pt)" Tag="18" Click="TextSizePreset_Click"/>
+                                <MenuItem Header="Medium — red (24 pt)" Tag="24" Click="TextSizePreset_Click"/>
+                                <MenuItem Header="Large — red (32 pt)" Tag="32" Click="TextSizePreset_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
+                <Button x:Name="LineToolButton" Style="{StaticResource LibraryToolButton}" Click="LineTool_Click" ToolTip="Draw a line"/>
+                <Button x:Name="CurvedArrowToolButton" Style="{StaticResource LibraryToolButton}" Click="CurvedArrowTool_Click" ToolTip="Draw a curved arrow"/>
+                <Button x:Name="BlurToolButton" Style="{StaticResource LibraryToolButton}" Click="BlurTool_Click" ToolTip="Blur an area"/>
+                <Button x:Name="StepToolButton" Style="{StaticResource LibraryToolButton}" Click="StepTool_Click" ToolTip="Add a numbered step"/>
+                <Button x:Name="RulerToolButton" Style="{StaticResource LibraryToolButton}" Click="RulerTool_Click" ToolTip="Measure distance"/>
+                <Button x:Name="RectangleToolButton" Style="{StaticResource LibraryToolButton}" Click="RectangleTool_Click" ToolTip="Draw a rectangle"/>
+                <Button x:Name="CircleToolButton" Style="{StaticResource LibraryToolButton}" Click="CircleTool_Click" ToolTip="Draw a circle"/>
+                <Button x:Name="EmojiToolButton" Style="{StaticResource LibraryToolButton}" Click="EmojiTool_Click" ToolTip="Add an emoji">
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="✅  Check" Tag="✅" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="❌  Cross" Tag="❌" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="⚠️  Warning" Tag="⚠️" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="⭐  Star" Tag="⭐" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="👍  Thumbs up" Tag="👍" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="👎  Thumbs down" Tag="👎" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="🔥  Fire" Tag="🔥" Click="EmojiPreset_Click"/>
+                            <MenuItem Header="💡  Idea" Tag="💡" Click="EmojiPreset_Click"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <Button x:Name="EraserToolButton" Style="{StaticResource LibraryToolButton}" Click="EraserTool_Click" ToolTip="Erase an area"/>
+                <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
+                    <Button x:Name="CropToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="CropTool_Click" ToolTip="Crop to selection"/>
+                    <Button x:Name="CropPresetButton" Style="{StaticResource LibraryPresetButton}" Click="CropPresetButton_Click" Content="▾" ToolTip="Crop modes">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Crop to selection" Tag="crop" Click="CropModePreset_Click"/>
+                                <MenuItem Header="Cut out horizontal/vertical band" Tag="cutout" Click="CropModePreset_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
+                <Button x:Name="ColorToolButton" Style="{StaticResource LibraryToolButton}" Click="ColorTool_Click" ToolTip="Color and highlight opacity">
+                    <Ellipse x:Name="ColorToolSwatch" Width="16" Height="16" Fill="#FFFF3B30"
+                             Stroke="#FF6B7280" StrokeThickness="1"/>
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="●  Red" Tag="#FFFF3B30" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  Yellow" Tag="#FFFFCC00" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  Green" Tag="#FF34C759" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  Blue" Tag="#FF007AFF" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  Orange" Tag="#FFFF9500" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  Gray" Tag="#FF8E8E93" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  Black" Tag="#FF111111" Click="ColorPreset_Click"/>
+                            <MenuItem Header="●  White" Tag="#FFFFFFFF" Click="ColorPreset_Click"/>
+                            <Separator/>
+                            <MenuItem Header="Highlight opacity">
+                                <MenuItem Header="20%" Tag="20" IsCheckable="True" IsChecked="True" Click="HighlightOpacityPreset_Click"/>
+                                <MenuItem Header="40%" Tag="40" IsCheckable="True" Click="HighlightOpacityPreset_Click"/>
+                                <MenuItem Header="60%" Tag="60" IsCheckable="True" Click="HighlightOpacityPreset_Click"/>
+                                <MenuItem Header="80%" Tag="80" IsCheckable="True" Click="HighlightOpacityPreset_Click"/>
+                            </MenuItem>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <Button x:Name="ShapeBorderToolButton" Style="{StaticResource LibraryToolButton}" Click="ShapeBorderTool_Click" ToolTip="Rectangle and circle border">
+                    <Rectangle x:Name="ShapeBorderSwatch" Width="16" Height="16" Fill="Transparent"
+                               Stroke="#FF111827" StrokeThickness="1.5" StrokeDashArray="2,2"/>
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="No border" Tag="none" IsCheckable="True" IsChecked="True" Click="ShapeBorderPreset_Click"/>
+                            <Separator/>
+                            <MenuItem Header="●  Red" Tag="#FFFF3B30" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  Yellow" Tag="#FFFFCC00" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  Green" Tag="#FF34C759" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  Blue" Tag="#FF007AFF" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  Orange" Tag="#FFFF9500" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  Gray" Tag="#FF8E8E93" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  Black" Tag="#FF111111" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                            <MenuItem Header="●  White" Tag="#FFFFFFFF" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <StackPanel x:Name="TextSizePanel" Orientation="Horizontal" Margin="5,0,0,0"
+                            VerticalAlignment="Center" Visibility="Collapsed">
+                    <TextBlock Text="T" FontSize="15" FontWeight="SemiBold" Foreground="#FF111827"
+                               VerticalAlignment="Center" Margin="0,0,3,0"/>
+                    <ComboBox x:Name="FontSizeBox" Width="58" Height="36"
+                              IsEditable="True" IsTextSearchEnabled="False"
+                              VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                              Background="#FFE5E7EB" Foreground="#FF111827"
+                              BorderBrush="#FF9CA3AF" BorderThickness="1"
+                              ToolTip="Text size in points"
+                              SelectionChanged="FontSizeBox_SelectionChanged"
+                              PreviewKeyDown="FontSizeBox_PreviewKeyDown"
+                              LostKeyboardFocus="FontSizeBox_LostKeyboardFocus">
+                        <ComboBoxItem Content="12"/>
+                        <ComboBoxItem Content="16"/>
+                        <ComboBoxItem Content="20"/>
+                        <ComboBoxItem Content="24"/>
+                        <ComboBoxItem Content="28"/>
+                        <ComboBoxItem Content="32"/>
+                        <ComboBoxItem Content="40"/>
+                        <ComboBoxItem Content="48"/>
+                        <ComboBoxItem Content="64"/>
+                        <ComboBoxItem Content="80"/>
+                    </ComboBox>
+                </StackPanel>
+                <Border Width="1" Margin="5,5,2,5" Background="{DynamicResource ThemeInputBorderBrush}"/>
+                <Button x:Name="UndoToolButton" Style="{StaticResource LibraryToolButton}" Click="UndoInlineEdit_Click" ToolTip="Undo (Ctrl+Z)">
+                    <Viewbox Width="19" Height="19">
+                        <Path Fill="#FF111827" Data="M20,11 A8,8 0 0 0 6.4,5.3 L3,2 L3,10 L11,10 L8.6,7.6 A5,5 0 1 1 8,14 L5,16 A8,8 0 1 0 20,11 Z"/>
+                    </Viewbox>
+                </Button>
+                <Button x:Name="RedoToolButton" Style="{StaticResource LibraryToolButton}" Click="RedoInlineEdit_Click" ToolTip="Redo (Ctrl+Y)">
+                    <Viewbox Width="19" Height="19">
+                        <Path Fill="#FF111827" Data="M4,11 A8,8 0 0 1 17.6,5.3 L21,2 L21,10 L13,10 L15.4,7.6 A5,5 0 1 0 16,14 L19,16 A8,8 0 1 1 4,11 Z"/>
+                    </Viewbox>
+                </Button>
+            </StackPanel>
+            </Border>
+            <TextBlock x:Name="CountText" Grid.Column="2" Margin="12,0,2,0"
+                       VerticalAlignment="Center" Opacity="0.5" FontSize="11"/>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="228"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="{DynamicResource ThemeCardBrush}"
+                    BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="6">
+                <TabControl x:Name="FilterTabs" Background="Transparent" BorderThickness="0"
+                            TabStripPlacement="Top" FontSize="10.5">
+                    <TabControl.ItemContainerStyle>
+                        <Style TargetType="TabItem">
+                            <Setter Property="Padding" Value="8,5"/>
+                            <Setter Property="MinWidth" Value="0"/>
+                            <Setter Property="Margin" Value="0"/>
+                        </Style>
+                    </TabControl.ItemContainerStyle>
+                    <TabItem Header="Dates">
+                        <ListBox x:Name="DateFilterList" Style="{StaticResource LibraryFilterList}"
+                                 ItemContainerStyle="{StaticResource LibraryFilterItem}"
+                                 DisplayMemberPath="Label" SelectionChanged="FilterList_SelectionChanged"/>
+                    </TabItem>
+                    <TabItem Header="Folders">
+                        <ListBox x:Name="FolderFilterList" Style="{StaticResource LibraryFilterList}"
+                                 ItemContainerStyle="{StaticResource LibraryFilterItem}"
+                                 DisplayMemberPath="Label" SelectionChanged="FilterList_SelectionChanged"/>
+                    </TabItem>
+                    <TabItem Header="Apps">
+                        <ListBox x:Name="ApplicationFilterList" Style="{StaticResource LibraryFilterList}"
+                                 ItemContainerStyle="{StaticResource LibraryFilterItem}"
+                                 DisplayMemberPath="Label" SelectionChanged="FilterList_SelectionChanged"/>
+                    </TabItem>
+                </TabControl>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch"
+                          Background="Transparent"/>
+
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="132"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Background="#171717"
+                        BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
+                        CornerRadius="8" ClipToBounds="True">
+                    <Grid>
+                        <Grid x:Name="EditorViewport" Margin="12" ClipToBounds="True"
+                              Background="Transparent"
+                              SizeChanged="EditorViewport_SizeChanged"
+                              MouseLeftButtonDown="EditorViewport_MouseLeftButtonDown"
+                              MouseMove="EditorViewport_MouseMove"
+                              MouseLeftButtonUp="EditorViewport_MouseLeftButtonUp">
+                            <Image x:Name="PreviewImage" Stretch="Uniform" IsHitTestVisible="False"/>
+                            <Canvas x:Name="PendingAnnotationCanvas" Background="Transparent" IsHitTestVisible="False"/>
+                            <Canvas x:Name="EditorCanvas" Background="Transparent"/>
+                            <TextBox x:Name="InlineTextEditor" Visibility="Collapsed" AcceptsReturn="True"
+                                     TextWrapping="Wrap" MinWidth="80" MinHeight="34"
+                                     HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                     Background="Transparent" Foreground="#FFFF3B30"
+                                     BorderThickness="0" Padding="0" TextAlignment="Left"
+                                     PreviewKeyDown="InlineTextEditor_PreviewKeyDown"
+                                     LostKeyboardFocus="InlineTextEditor_LostKeyboardFocus">
+                                <TextBox.Template>
+                                    <ControlTemplate TargetType="TextBox">
+                                        <Grid Background="Transparent">
+                                            <Rectangle Stroke="#99000000" StrokeThickness="3"
+                                                       IsHitTestVisible="False"/>
+                                            <Rectangle Stroke="#FFFFFFFF" StrokeThickness="1"
+                                                       StrokeDashArray="4,3" IsHitTestVisible="False"/>
+                                            <ScrollViewer x:Name="PART_ContentHost" Background="Transparent"/>
+                                        </Grid>
+                                    </ControlTemplate>
+                                </TextBox.Template>
+                            </TextBox>
+                        </Grid>
+                        <TextBlock x:Name="PreviewEmptyText" Text="Select a screenshot"
+                                   Foreground="White" Opacity="0.35" FontSize="18"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                        <Border VerticalAlignment="Bottom" Background="#D9222222" Padding="12,9">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock x:Name="PreviewSourceText" Foreground="White" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock x:Name="PreviewDateText" Foreground="White" Opacity="0.58"
+                                               FontSize="11" Margin="0,2,0,0"/>
+                                    <TextBlock x:Name="PreviewTagsText" Foreground="#FF6AA9FF" Opacity="0.92"
+                                               FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Content="Copy" Style="{StaticResource LibraryButton}" Click="CopySelected_Click"/>
+                                    <Button Content="Edit tags" Style="{StaticResource LibraryButton}" Click="EditTags_Click"/>
+                                    <Button Content="Show in folder" Style="{StaticResource LibraryButton}" Click="ShowInFolder_Click"/>
+                                    <Button Content="Delete" Style="{StaticResource LibraryButton}" Click="DeleteSelected_Click"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="1" Margin="0,8,0,0" Background="{DynamicResource ThemeCardBrush}"
+                        BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="4">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="22"/>
+                        </Grid.RowDefinitions>
+                        <ListBox x:Name="FilmstripList" ItemsSource="{Binding VisibleItems}"
+                                 ItemContainerStyle="{StaticResource FilmstripItem}"
+                                 SelectionChanged="FilmstripList_SelectionChanged"
+                                 Loaded="FilmstripList_Loaded"
+                                 SizeChanged="FilmstripList_SizeChanged"
+                                 PreviewMouseWheel="FilmstripList_PreviewMouseWheel"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                 ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                 ScrollViewer.CanContentScroll="False"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                 Background="Transparent" BorderThickness="0">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <VirtualizingStackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Width="112" Height="88" Padding="2" CornerRadius="4"
+                                            Background="#252525" BorderThickness="2"
+                                            ToolTip="{Binding ToolTip}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                                               Loaded="FilmstripImage_Loaded"/>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <ScrollBar x:Name="FilmstripScrollBar" Grid.Row="1" Margin="4,3,4,1"
+                                   Style="{StaticResource FilmstripScrollBar}"
+                                   Orientation="Horizontal" Minimum="0"
+                                   SmallChange="116" LargeChange="464"
+                                   ValueChanged="FilmstripScrollBar_ValueChanged"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

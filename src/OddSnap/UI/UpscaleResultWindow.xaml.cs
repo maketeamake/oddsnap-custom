@@ -1,0 +1,465 @@
+using System.Drawing;
+using System.Windows.Media;
+using System.Windows;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
+using OddSnap.Helpers;
+using OddSnap.Services;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using MouseButton = System.Windows.Input.MouseButton;
+using Key = System.Windows.Input.Key;
+
+namespace OddSnap.UI;
+
+public partial class UpscaleResultWindow : Window
+{
+    private readonly SettingsService _settingsService;
+    private readonly Bitmap _originalBitmap;
+    private readonly Action<Bitmap, string> _acceptResult;
+    private Bitmap? _processedBitmap;
+    private string _providerName = "";
+    private bool _isProcessing;
+    private bool _isClosed;
+    private bool _isDraggingCompare;
+    private double _compareSplit = 0.5;
+    private LocalUpscaleEngine _selectedEngine;
+    private UpscaleExecutionProvider _selectedExecutionProvider;
+    private Rect _compareImageRect = Rect.Empty;
+    private CancellationTokenSource? _processCts;
+
+    public UpscaleResultWindow(Bitmap originalBitmap, SettingsService settingsService, Action<Bitmap, string> acceptResult)
+    {
+        _originalBitmap = new Bitmap(originalBitmap);
+        _settingsService = settingsService;
+        _acceptResult = acceptResult;
+        InitializeComponent();
+        OddSnapWindowChrome.Apply(this);
+        UiScale.Set(settingsService.Settings.UiScale);
+        UiScale.ApplyToWindow(this, RootBorder, scaleWindowBounds: true);
+
+        Theme.Refresh();
+        ApplyTheme();
+        Theme.Changed += OnSystemThemeChanged;
+        Closed += (_, _) => Theme.Changed -= OnSystemThemeChanged;
+        LoadInitialState();
+    }
+
+    private void OnSystemThemeChanged()
+    {
+        ApplyTheme();
+        LoadIcons();
+    }
+
+    private void LoadInitialState()
+    {
+        var settings = _settingsService.Settings.UpscaleUploadSettings ?? new UpscaleSettings();
+        _selectedExecutionProvider = settings.LocalExecutionProvider;
+        var beforeSource = BitmapPerf.ToBitmapSource(_originalBitmap);
+        CompareBeforeImage.Source = beforeSource;
+        PopulateDownloadedModels(settings);
+        LoadIcons();
+        UpdateScaleText();
+        SetCompareMode(false);
+    }
+
+    private void LoadIcons()
+    {
+        UseResultIcon.Source = FluentIcons.RenderWpf("download", GetThemeIconColor(), 18);
+    }
+
+    private void PopulateDownloadedModels(UpscaleSettings settings)
+    {
+        var configuredEngine = settings.GetActiveLocalEngine();
+        var candidates = GetAllDownloadedModels().ToList();
+        if (candidates.Count == 0)
+            candidates.Add(configuredEngine);
+
+        ModelCombo.Items.Clear();
+        foreach (var engine in candidates.Distinct())
+        {
+            ModelCombo.Items.Add(new System.Windows.Controls.ComboBoxItem
+            {
+                Content = LocalUpscaleEngineService.GetEngineLabel(engine),
+                Tag = engine.ToString()
+            });
+        }
+
+        var selected = candidates.Contains(configuredEngine) ? configuredEngine : candidates[0];
+        SelectModel(selected);
+    }
+
+    private IEnumerable<LocalUpscaleEngine> GetAllDownloadedModels()
+    {
+        var engines = new[] { LocalUpscaleEngine.SwinIrRealWorld, LocalUpscaleEngine.RealEsrganX4Plus };
+
+        return engines.Where(LocalUpscaleEngineService.IsModelDownloaded);
+    }
+
+    private void SelectModel(LocalUpscaleEngine engine)
+    {
+        _selectedEngine = engine;
+        foreach (var item in ModelCombo.Items.OfType<System.Windows.Controls.ComboBoxItem>())
+        {
+            if (string.Equals(item.Tag as string, engine.ToString(), StringComparison.Ordinal))
+            {
+                ModelCombo.SelectedItem = item;
+                break;
+            }
+        }
+
+        int minScale = LocalUpscaleEngineService.GetMinScaleFactor(engine);
+        int maxScale = LocalUpscaleEngineService.GetScaleFactor(engine);
+        ScaleSlider.Minimum = minScale;
+        ScaleSlider.Maximum = maxScale;
+        ScaleSlider.Value = Math.Clamp(ScaleSlider.Value, minScale, maxScale);
+        StatusText.Text = "Click Upscale to generate a comparison.";
+    }
+
+    private void ApplyTheme()
+    {
+        RootBorder.Background = Theme.Brush(Theme.BgPrimary);
+        RootBorder.BorderBrush = Theme.Brush(Theme.WindowBorder);
+        RootBorder.BorderThickness = new Thickness(1);
+        Resources["ThemeTextPrimaryBrush"] = Theme.Brush(Theme.TextPrimary);
+        Resources["ThemeTextSecondaryBrush"] = Theme.Brush(Theme.TextSecondary);
+        Resources["ThemeMutedBrush"] = Theme.Brush(Theme.TextMuted);
+        Resources["ThemeCardBrush"] = Theme.Brush(Theme.BgCard);
+        Resources["ThemeInputBackgroundBrush"] = Theme.Brush(Theme.BgSecondary);
+        Resources["ThemeInputBorderBrush"] = Theme.Brush(Theme.BorderSubtle);
+        Resources["ThemeWindowBorderBrush"] = Theme.Brush(Theme.WindowBorder);
+        Resources["UpscaleShimmerBrush"] = Theme.Brush(Theme.Shimmer);
+        Resources["LoadingTextBrush"] = Theme.Brush(System.Windows.Media.Colors.White);
+        Icon = ThemedLogo.Square(32);
+    }
+
+    private static System.Drawing.Color GetThemeIconColor()
+        => Theme.IsDark
+            ? System.Drawing.Color.FromArgb(245, 255, 255, 255)
+            : System.Drawing.Color.FromArgb(230, 24, 24, 24);
+
+    private void UpdateScaleText()
+    {
+        if (ScaleValueText is null || ScaleSlider is null)
+            return;
+
+        ScaleValueText.Text = $"{(int)ScaleSlider.Value}x";
+    }
+
+    private async void UpscaleBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isProcessing)
+            return;
+
+        _isProcessing = true;
+        _processCts?.Cancel();
+        _processCts?.Dispose();
+        var requestCts = new CancellationTokenSource();
+        _processCts = requestCts;
+        var processToken = requestCts.Token;
+        UpscaleBtn.IsEnabled = false;
+        UseResultBtn.IsEnabled = false;
+        AfterLoadingOverlay.Visibility = Visibility.Visible;
+        StartLoadingAnimation();
+        StatusText.Text = "Generating upscale...";
+
+        try
+        {
+            var upscaleSettings = _settingsService.Settings.UpscaleUploadSettings ?? new UpscaleSettings();
+            int requestedScale = (int)ScaleSlider.Value;
+            upscaleSettings.ScaleFactor = requestedScale;
+            upscaleSettings.LocalExecutionProvider = _selectedExecutionProvider;
+            if (_selectedExecutionProvider == UpscaleExecutionProvider.Gpu)
+                upscaleSettings.LocalGpuEngine = _selectedEngine;
+            else
+                upscaleSettings.LocalCpuEngine = _selectedEngine;
+            upscaleSettings.LocalEngine = _selectedEngine;
+            _settingsService.Save();
+
+            using var processingBitmap = new Bitmap(_originalBitmap);
+            var result = await UpscaleService.ProcessAsync(processingBitmap, upscaleSettings, processToken);
+            if (_isClosed)
+            {
+                result.Image?.Dispose();
+                return;
+            }
+
+            if (!result.Success || result.Image is null)
+            {
+                ShowUpscalePreviewFailed(result.Error ?? "Upscale did not return an image.");
+                return;
+            }
+
+            _processedBitmap?.Dispose();
+            _processedBitmap = result.Image;
+            _providerName = result.ProviderName;
+
+            CompareAfterImage.Source = BitmapPerf.ToBitmapSource(_processedBitmap);
+            UseResultBtn.IsEnabled = true;
+            SetCompareMode(true);
+            SetCompareSplit(0.5);
+        }
+        catch (Exception ex)
+        {
+            if (ex is OperationCanceledException && _isClosed)
+                return;
+
+            AppDiagnostics.LogError("upscale.window", ex);
+            if (!_isClosed)
+                ShowUpscalePreviewFailed(ex.Message);
+        }
+        finally
+        {
+            if (!_isClosed)
+            {
+                StopLoadingAnimation();
+                AfterLoadingOverlay.Visibility = Visibility.Collapsed;
+                CompareImageBlur.Radius = 0;
+                UpscaleBtn.IsEnabled = true;
+                UseResultBtn.IsEnabled = _processedBitmap is not null;
+            }
+
+            _isProcessing = false;
+            if (ReferenceEquals(_processCts, requestCts))
+                _processCts = null;
+            requestCts.Dispose();
+        }
+    }
+
+    private void ShowUpscalePreviewFailed(string details)
+    {
+        if (_processedBitmap is not null)
+            SetCompareMode(true);
+
+        StatusText.Text = _processedBitmap is null
+            ? "Upscale failed. Try again, or check Settings -> Upscale."
+            : "Upscale failed. Previous result is still available.";
+
+        ToastWindow.ShowError(
+            "Upscale failed",
+            $"OddSnap could not generate the upscale preview. Try again, or check Settings -> Upscale.\n{details}");
+    }
+
+    private void UseResultBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed || _isProcessing || _processedBitmap is null)
+            return;
+
+        Bitmap? accepted = null;
+        try
+        {
+            accepted = new Bitmap(_processedBitmap);
+            _acceptResult(accepted, _providerName);
+            accepted = null;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            accepted?.Dispose();
+            AppDiagnostics.LogError("upscale.window.accept", ex);
+            ToastWindow.ShowError(
+                "Upscale result failed",
+                $"OddSnap could not use this upscale result. Keep the preview open and try again.\n{ex.Message}");
+        }
+    }
+
+    private void SetCompareMode(bool enabled)
+    {
+        CompareAfterImage.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        CompareDivider.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        CompareHandle.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        BeforeCornerLabel.Visibility = Visibility.Visible;
+        StatusText.Text = enabled
+            ? "Click or drag on the image to compare."
+            : "Click Upscale to generate a comparison.";
+        AfterCornerLabel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void SetCompareSplit(double normalized)
+    {
+        if (_compareImageRect.IsEmpty)
+            return;
+
+        _compareSplit = Math.Clamp(normalized, 0, 1);
+        double visibleWidth = _compareImageRect.Width * _compareSplit;
+        CompareAfterClip.Rect = new Rect(_compareImageRect.X, _compareImageRect.Y, visibleWidth, _compareImageRect.Height);
+        var dividerX = _compareImageRect.X + visibleWidth;
+        CompareDivider.Margin = new Thickness(Math.Max(0, dividerX - 1), _compareImageRect.Y, 0, 0);
+        CompareDivider.Height = _compareImageRect.Height;
+        CompareHandle.Margin = new Thickness(dividerX - 22, 0, 0, 0);
+    }
+
+    private void CompareSurface_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateCompareImageLayout();
+        if (CompareAfterImage.Visibility == Visibility.Visible)
+            SetCompareSplit(_compareSplit);
+    }
+
+    private void CompareSurface_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (CompareAfterImage.Visibility != Visibility.Visible)
+            return;
+
+        _isDraggingCompare = true;
+        CompareSurface.CaptureMouse();
+        UpdateCompareFromPointer(e.GetPosition(CompareSurface).X);
+    }
+
+    private void CompareSurface_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingCompare)
+            return;
+
+        UpdateCompareFromPointer(e.GetPosition(CompareSurface).X);
+    }
+
+    private void CompareSurface_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isDraggingCompare)
+            return;
+
+        _isDraggingCompare = false;
+        CompareSurface.ReleaseMouseCapture();
+        UpdateCompareFromPointer(e.GetPosition(CompareSurface).X);
+    }
+
+    private void UpdateCompareFromPointer(double pointerX)
+    {
+        if (_compareImageRect.IsEmpty)
+            return;
+
+        var normalized = (pointerX - _compareImageRect.X) / _compareImageRect.Width;
+        SetCompareSplit(normalized);
+    }
+
+    private void StartLoadingAnimation()
+    {
+        CompareImageBlur.Radius = 14;
+        LoadingTextShimmer.Start(AfterLoadingTitle, Colors.White, opacity: 1.0);
+        LoadingTextShimmer.Start(AfterLoadingSubtitle, Colors.White, opacity: 0.62);
+    }
+
+    private void StopLoadingAnimation()
+    {
+        LoadingTextShimmer.Stop(AfterLoadingTitle, Theme.Brush(Theme.TextPrimary), 1.0);
+        LoadingTextShimmer.Stop(AfterLoadingSubtitle, Theme.Brush(Theme.TextPrimary), 0.5);
+    }
+
+    private void UpdateCompareImageLayout()
+    {
+        if (CompareSurface.ActualWidth <= 0 || CompareSurface.ActualHeight <= 0 || _originalBitmap.Width <= 0 || _originalBitmap.Height <= 0)
+            return;
+
+        double surfaceWidth = CompareSurface.ActualWidth;
+        double surfaceHeight = CompareSurface.ActualHeight;
+        double imageRatio = _originalBitmap.Width / (double)_originalBitmap.Height;
+        double surfaceRatio = surfaceWidth / surfaceHeight;
+
+        double width;
+        double height;
+        if (imageRatio > surfaceRatio)
+        {
+            width = surfaceWidth;
+            height = width / imageRatio;
+        }
+        else
+        {
+            height = surfaceHeight;
+            width = height * imageRatio;
+        }
+
+        double x = (surfaceWidth - width) / 2d;
+        double y = (surfaceHeight - height) / 2d;
+        _compareImageRect = new Rect(x, y, width, height);
+
+        ApplyImageRect(CompareBeforeImage, _compareImageRect);
+        ApplyImageRect(CompareAfterImage, _compareImageRect);
+    }
+
+    private static void ApplyImageRect(System.Windows.Controls.Image image, Rect rect)
+    {
+        image.Width = rect.Width;
+        image.Height = rect.Height;
+        image.Margin = new Thickness(rect.X, rect.Y, 0, 0);
+    }
+
+    private void ScaleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!IsLoaded && ScaleValueText is null)
+            return;
+
+        UpdateScaleText();
+        if (IsLoaded && !_isProcessing)
+            ClearProcessedResult();
+    }
+
+    private void ModelCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (ModelCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item || item.Tag is not string tag)
+            return;
+
+        if (!Enum.TryParse<LocalUpscaleEngine>(tag, out var engine))
+            return;
+
+        _selectedEngine = engine;
+        int minScale = LocalUpscaleEngineService.GetMinScaleFactor(engine);
+        int maxScale = LocalUpscaleEngineService.GetScaleFactor(engine);
+        ScaleSlider.Minimum = minScale;
+        ScaleSlider.Maximum = maxScale;
+        ScaleSlider.Value = Math.Clamp(ScaleSlider.Value, minScale, maxScale);
+        if (IsLoaded && !_isProcessing)
+            ClearProcessedResult();
+        else
+            StatusText.Text = "Click Upscale to generate a comparison.";
+    }
+
+    private void TitleBar_CloseRequested(object? sender, EventArgs e) => Close();
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            Close();
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _isClosed = true;
+        var processCts = _processCts;
+        _processCts = null;
+        try { processCts?.Cancel(); } catch { }
+        if (!_isProcessing)
+            processCts?.Dispose();
+        StopLoadingAnimation();
+        if (_isDraggingCompare || CompareSurface.IsMouseCaptured)
+        {
+            _isDraggingCompare = false;
+            CompareSurface.ReleaseMouseCapture();
+        }
+
+        CompareBeforeImage.Source = null;
+        CompareAfterImage.Source = null;
+        _processedBitmap?.Dispose();
+        _processedBitmap = null;
+        _originalBitmap.Dispose();
+        base.OnClosed(e);
+    }
+
+    private void ClearProcessedResult()
+    {
+        if (_processedBitmap is not null)
+        {
+            _processedBitmap.Dispose();
+            _processedBitmap = null;
+        }
+
+        _providerName = "";
+        CompareAfterImage.Source = null;
+        UseResultBtn.IsEnabled = false;
+        SetCompareMode(false);
+    }
+}

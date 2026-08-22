@@ -1,0 +1,498 @@
+using System.Runtime;
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using OddSnap.Capture;
+using OddSnap.Models;
+using OddSnap.Native;
+using OddSnap.Services;
+using OddSnap.UI;
+
+namespace OddSnap;
+
+public partial class App
+{
+    private const long IdleTrimPrivateBytesThreshold = 384L * 1024 * 1024;
+    private static readonly TimeSpan MinimumIdleTrimInterval = TimeSpan.FromMinutes(2);
+
+    private static void SyncStartupRegistry(bool enabled)
+    {
+        UninstallService.SetStartupEntry(enabled);
+    }
+
+    private void ShowSettings(bool openHistory = false)
+    {
+        if (Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        if (_settingsWindow is { IsVisible: true })
+        {
+            if (openHistory)
+                _settingsWindow.OpenHistoryFromTray();
+            RestoreAndActivateSettingsWindow(_settingsWindow);
+            return;
+        }
+
+        if (openHistory)
+            Interlocked.Exchange(ref _openHistoryWhenSettingsReady, 1);
+
+        if (Interlocked.CompareExchange(ref _settingsWindowOpening, 1, 0) != 0)
+            return;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (Volatile.Read(ref _isShuttingDown) != 0)
+                {
+                    Interlocked.Exchange(ref _settingsWindowOpening, 0);
+                    return;
+                }
+
+                var historyService = EnsureHistoryService();
+                var imageSearchIndexService = EnsureImageSearchIndexService();
+                if (!TryPostToAppDispatcher(() =>
+                {
+                    try
+                    {
+                        if (Volatile.Read(ref _isShuttingDown) != 0)
+                            return;
+
+                        if (_settingsWindow is { IsVisible: true })
+                        {
+                            RestoreAndActivateSettingsWindow(_settingsWindow);
+                            return;
+                        }
+
+                        var shouldOpenHistory = Interlocked.Exchange(ref _openHistoryWhenSettingsReady, 0) != 0;
+                        ShowSettingsWindow(historyService, imageSearchIndexService, shouldOpenHistory);
+                    }
+                    catch (Exception ex)
+                    {
+                        _settingsWindow = null;
+                        ShowSettingsOpenFailed(ex, "lifecycle.show-settings", "lifecycle.show-settings.toast");
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _settingsWindowOpening, 0);
+                    }
+                }, DispatcherPriority.Background, "lifecycle.show-settings-post"))
+                {
+                    Interlocked.Exchange(ref _settingsWindowOpening, 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!TryPostToAppDispatcher(() =>
+                {
+                    _settingsWindow = null;
+                    ShowSettingsOpenFailed(ex, "lifecycle.show-settings.init", "lifecycle.show-settings.init.toast");
+                    Interlocked.Exchange(ref _settingsWindowOpening, 0);
+                }, DispatcherPriority.Background, "lifecycle.show-settings-init-failed-post"))
+                {
+                    AppDiagnostics.LogError("lifecycle.show-settings.init", ex);
+                    Interlocked.Exchange(ref _settingsWindowOpening, 0);
+                }
+            }
+        });
+    }
+
+    private static void ShowSettingsOpenFailed(Exception ex, string diagnosticKey, string toastDiagnosticKey)
+    {
+        AppDiagnostics.LogError(diagnosticKey, ex);
+        try
+        {
+            ToastWindow.ShowError(
+                "Settings failed to open",
+                $"OddSnap could not open Settings. Try again from the tray menu, or restart OddSnap if it keeps failing.\n{ex.Message}");
+        }
+        catch (Exception toastEx)
+        {
+            AppDiagnostics.LogError(toastDiagnosticKey, toastEx);
+        }
+    }
+
+    private void ShowSettingsWindow(HistoryService historyService, ImageSearchIndexService imageSearchIndexService, bool openHistory = false)
+    {
+        var win = new SettingsWindow(_settingsService!, historyService, imageSearchIndexService);
+        Action hotkeyHandler = ApplyRuntimeSettings;
+        Action uninstallHandler = BeginUninstall;
+        Action localizationHandler = () => _trayIcon?.RefreshLocalization();
+        Action traySettingsHandler = () => _trayIcon?.UpdateSettings(_settingsService?.Settings);
+        win.HotkeyChanged += hotkeyHandler;
+        win.UninstallRequested += uninstallHandler;
+        win.LocalizationChanged += localizationHandler;
+        win.TraySettingsChanged += traySettingsHandler;
+        win.Closed += (_, _) =>
+        {
+            win.HotkeyChanged -= hotkeyHandler;
+            win.UninstallRequested -= uninstallHandler;
+            win.LocalizationChanged -= localizationHandler;
+            win.TraySettingsChanged -= traySettingsHandler;
+            _settingsWindow = null;
+            ScheduleIdleMemoryTrim();
+        };
+        _settingsWindow = win;
+        if (openHistory)
+            win.OpenHistoryFromTray();
+        win.Show();
+    }
+
+    private void ShowHistory() => ShowHistory(null);
+
+    private void ShowHistory(string? selectedCapturePath)
+    {
+        if (Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        if (_historyLibraryWindow is { IsVisible: true } existing)
+        {
+            if (!string.IsNullOrWhiteSpace(selectedCapturePath))
+                existing.SelectCapture(selectedCapturePath);
+            RestoreAndActivateHistoryWindow(existing);
+            return;
+        }
+
+        try
+        {
+            var window = new HistoryLibraryWindow(EnsureHistoryService(), EnsureImageSearchIndexService());
+            window.Closed += (_, _) =>
+            {
+                _historyLibraryWindow = null;
+                ScheduleIdleMemoryTrim();
+            };
+            _historyLibraryWindow = window;
+            if (!string.IsNullOrWhiteSpace(selectedCapturePath))
+                window.SelectCapture(selectedCapturePath);
+            RestoreAndActivateHistoryWindow(window);
+        }
+        catch (Exception ex)
+        {
+            _historyLibraryWindow = null;
+            AppDiagnostics.LogError("lifecycle.show-history-library", ex);
+            ToastWindow.ShowError("History failed to open", ex.Message);
+        }
+    }
+
+    private static void RestoreAndActivateHistoryWindow(HistoryLibraryWindow window)
+    {
+        if (window.WindowState == WindowState.Minimized)
+            window.WindowState = WindowState.Normal;
+
+        window.Show();
+        window.Activate();
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle != IntPtr.Zero)
+            User32.SetForegroundWindow(handle);
+
+        _ = window.Dispatcher.BeginInvoke(() =>
+        {
+            if (!window.IsVisible)
+                return;
+            // A one-cycle topmost pulse reliably brings the first Library window
+            // above the application from which the global F10 capture was made.
+            window.Topmost = true;
+            window.Topmost = false;
+            window.Activate();
+            var currentHandle = new WindowInteropHelper(window).Handle;
+            if (currentHandle != IntPtr.Zero)
+                User32.SetForegroundWindow(currentHandle);
+        }, DispatcherPriority.Loaded);
+    }
+
+    private static void RestoreAndActivateSettingsWindow(SettingsWindow window)
+    {
+        if (window.WindowState == WindowState.Minimized)
+            window.WindowState = WindowState.Normal;
+
+        window.Activate();
+    }
+
+    private void HandleSingleInstanceActivation(SingleInstanceActivationRequest request)
+    {
+        if (Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        _ = TryPostToAppDispatcher(() =>
+        {
+            if (_settingsService is null || Volatile.Read(ref _isShuttingDown) != 0)
+                return;
+
+            switch (request)
+            {
+                case SingleInstanceActivationRequest.OpenSettings:
+                    ShowSettings();
+                    break;
+                case SingleInstanceActivationRequest.OpenHistory:
+                    ShowHistory();
+                    break;
+            }
+        }, DispatcherPriority.Normal, "lifecycle.single-instance-post");
+    }
+
+    private void ApplyRuntimeSettings()
+    {
+        ScreenCapture.HdrCaptureCompatibleMode = _settingsService!.Settings.HdrCaptureCompatibleMode;
+        OddSnapUiCaptureVisibility.SetShowInScreenshots(_settingsService.Settings.ShowOddSnapUiInScreenshots);
+        _trayIcon?.UpdateSettings(_settingsService.Settings);
+        RegisterHotkeys();
+    }
+
+    private void BeginUninstall()
+    {
+        _ = TryPostToAppDispatcher(() =>
+        {
+            if (!ThemedConfirmDialog.Confirm(
+                    _settingsWindow,
+                    "Confirm uninstall",
+                    "Uninstall OddSnap? This will remove the app data and try to remove the app folder.",
+                    "Uninstall",
+                    "Cancel"))
+            {
+                _settingsWindow?.ShowUninstallCanceledStatus();
+                ToastWindow.Show("Uninstall canceled", "OddSnap was left installed.");
+                return;
+            }
+
+            try { UninstallService.RemoveStartupEntry(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.uninstall.remove-startup-entry", ex); }
+            try { UninstallService.RemoveInstalledAppEntry(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.uninstall.remove-installed-entry", ex); }
+            try { UninstallService.RemoveStartMenuShortcut(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.uninstall.remove-start-menu", ex); }
+            try { UninstallService.RemoveAppData(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.uninstall.remove-appdata", ex); }
+            try { UninstallService.ScheduleInstallFolderRemoval(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.uninstall.schedule-folder-removal", ex); }
+
+            ToastWindow.Show("Uninstalling", "OddSnap will close and remove its files.");
+            Shutdown();
+        }, DispatcherPriority.Normal, "lifecycle.begin-uninstall-post");
+    }
+
+    private async Task CheckForUpdatesOnStartupAsync()
+    {
+        try
+        {
+            var result = await UpdateService.CheckForUpdatesAsync();
+            if (!result.IsUpdateAvailable)
+                return;
+
+            var detail = string.IsNullOrWhiteSpace(result.AssetName)
+                ? $"{result.LatestVersionLabel} is available on GitHub Releases."
+                : $"{result.LatestVersionLabel} is ready: {result.AssetName}";
+
+            _ = TryPostToAppDispatcher(
+                () => ToastWindow.Show("Update available", detail),
+                DispatcherPriority.Background,
+                "lifecycle.update-available-post");
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogWarning("lifecycle.check-for-updates", "Update check failed.", ex);
+        }
+    }
+
+    private HistoryService EnsureHistoryService()
+    {
+        lock (_historyGate)
+        {
+            if (_historyService is null)
+            {
+                _historyService = new HistoryService();
+                _historyService.Load();
+                if (!_historyChangedHooked)
+                {
+                    _historyService.Changed += HistoryService_Changed;
+                    _historyChangedHooked = true;
+                }
+            }
+
+            _historyService.CompressHistory = _settingsService!.Settings.CompressHistory;
+            _historyService.JpegQuality = _settingsService.Settings.JpegQuality;
+            _historyService.CaptureImageFormat = _settingsService.Settings.CaptureImageFormat;
+            QueueHistoryMaintenance();
+            return _historyService;
+        }
+    }
+
+    private ImageSearchIndexService EnsureImageSearchIndexService()
+    {
+        lock (_historyGate)
+        {
+            if (_imageSearchIndexService is null)
+            {
+                _imageSearchIndexService = new ImageSearchIndexService();
+                _imageSearchIndexService.Load();
+                if (_historyService is not null && _settingsService!.Settings.AutoIndexImages)
+                    _imageSearchIndexService.RequestSync(_historyService.ImageEntries, _settingsService!.Settings.OcrLanguageTag);
+            }
+
+            QueueHistoryMaintenance();
+            return _imageSearchIndexService;
+        }
+    }
+
+    private void QueueHistoryMaintenance()
+    {
+        if (Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        HistoryService historyService;
+        ImageSearchIndexService? imageSearchIndexService;
+        HistoryRetentionPeriod retention;
+        bool shouldIndex;
+        string? ocrLanguageTag;
+
+        lock (_historyGate)
+        {
+            if (_historyMaintenanceScheduled || _historyService is null || _settingsService is null)
+                return;
+
+            _historyMaintenanceScheduled = true;
+            historyService = _historyService;
+            imageSearchIndexService = _imageSearchIndexService;
+            retention = _settingsService.Settings.HistoryRetention;
+            shouldIndex = _settingsService.Settings.AutoIndexImages;
+            ocrLanguageTag = _settingsService.Settings.OcrLanguageTag;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                historyService.PruneMissingFiles();
+                historyService.PruneByRetention(retention);
+
+                if (shouldIndex && imageSearchIndexService is not null)
+                {
+                    imageSearchIndexService.RequestSync(
+                        historyService.ImageEntries,
+                        ocrLanguageTag);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppDiagnostics.LogError("lifecycle.history-maintenance", ex);
+            }
+            finally
+            {
+                lock (_historyGate)
+                    _historyMaintenanceScheduled = false;
+            }
+        });
+    }
+
+    private void HistoryService_Changed()
+    {
+        QueueImageSearchIndexRefresh();
+    }
+
+    private void QueueImageSearchIndexRefresh()
+    {
+        if (Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        if (Interlocked.Exchange(ref _historyIndexRefreshScheduled, 1) != 0)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(1500).ConfigureAwait(false);
+
+                HistoryService? historyService;
+                ImageSearchIndexService? imageSearchIndexService;
+                SettingsService? settingsService;
+                lock (_historyGate)
+                {
+                    historyService = _historyService;
+                    imageSearchIndexService = _imageSearchIndexService;
+                    settingsService = _settingsService;
+                }
+
+                if (historyService is null ||
+                    imageSearchIndexService is null ||
+                    settingsService is null ||
+                    !settingsService.Settings.AutoIndexImages)
+                {
+                    return;
+                }
+
+                imageSearchIndexService.RequestSync(historyService.ImageEntries, settingsService.Settings.OcrLanguageTag);
+            }
+            catch (Exception ex)
+            {
+                AppDiagnostics.LogError("lifecycle.history-index-refresh", ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _historyIndexRefreshScheduled, 0);
+            }
+        });
+    }
+
+    private void ScheduleIdleMemoryTrim()
+    {
+        if (_idleTrimTimer is null || Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        _idleTrimTimer.Stop();
+        _idleTrimTimer.Start();
+    }
+
+    private void TrimIdleMemory()
+    {
+        _idleTrimTimer?.Stop();
+
+        if (Volatile.Read(ref _isShuttingDown) != 0)
+            return;
+
+        if (_isCapturing != 0 || Volatile.Read(ref _activeUploadCount) > 0)
+        {
+            ScheduleIdleMemoryTrim();
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _idleTrimInProgress, 1, 0) != 0)
+        {
+            ScheduleIdleMemoryTrim();
+            return;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var now = DateTime.UtcNow;
+                if (now - _lastIdleTrimUtc < MinimumIdleTrimInterval)
+                    return;
+
+                using var process = System.Diagnostics.Process.GetCurrentProcess();
+                var privateBytes = process.PrivateMemorySize64;
+                SettingsWindow.TrimThumbCache(privateBytes >= IdleTrimPrivateBytesThreshold ? 48 : 72);
+
+                if (privateBytes < IdleTrimPrivateBytesThreshold)
+                {
+                    _lastIdleTrimUtc = now;
+                    return;
+                }
+
+                try { _imageSearchIndexService?.TrimMemory(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.trim-idle-memory.image-search", ex); }
+                try { OcrService.TrimMemory(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.trim-idle-memory.ocr", ex); }
+                try { DxgiScreenCapture.ResetCache(); } catch (Exception ex) { AppDiagnostics.LogError("lifecycle.trim-idle-memory.dxgi", ex); }
+
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: true);
+                ProcessMemory.TrimCurrentProcessWorkingSet();
+                _lastIdleTrimUtc = now;
+            }
+            catch (Exception ex)
+            {
+                AppDiagnostics.LogError("lifecycle.trim-idle-memory", ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _idleTrimInProgress, 0);
+            }
+        });
+    }
+}

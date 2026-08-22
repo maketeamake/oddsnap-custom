@@ -1,0 +1,303 @@
+using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
+using OddSnap.Capture;
+using OddSnap.Helpers;
+using OddSnap.Services;
+using Color = System.Windows.Media.Color;
+
+namespace OddSnap.UI;
+
+public partial class ToastWindow
+{
+    private const string DefaultImagePreviewTitle = "";
+    private const double StackGap = 8;
+    public static event Action<string>? ImagePreviewEditRequested;
+
+    public static void SetPosition(OddSnap.Models.ToastPosition position) => _position = position;
+    public static void SetDuration(double seconds) => _durationSeconds = Math.Clamp(seconds, 1, 10);
+    public static void SetButtonLayout(Models.AppSettings.ToastButtonLayoutSettings? layout)
+    {
+        _buttonLayout = layout is null
+            ? new Models.AppSettings.ToastButtonLayoutSettings()
+            : new Models.AppSettings.ToastButtonLayoutSettings
+            {
+                ShowClose = layout.ShowClose,
+                CloseSlot = layout.CloseSlot,
+                ShowPin = layout.ShowPin,
+                PinSlot = layout.PinSlot,
+                ShowSave = layout.ShowSave,
+                SaveSlot = layout.SaveSlot,
+                ShowOffice = layout.ShowOffice,
+                OfficeSlot = layout.OfficeSlot,
+                ShowAiRedirect = layout.ShowAiRedirect,
+                AiRedirectSlot = layout.AiRedirectSlot,
+                ShowDelete = layout.ShowDelete,
+                DeleteSlot = layout.DeleteSlot
+            };
+
+        foreach (var toast in _retainedPinnedToasts.ToArray())
+            toast.RefreshOverlayButtonLayout();
+        _current?.RefreshOverlayButtonLayout();
+    }
+
+    public static void SetFadeOutBehavior(bool enabled, double seconds)
+    {
+        _fadeOutEnabled = enabled;
+        _fadeOutSeconds = Math.Clamp(seconds, 1, 10);
+    }
+    public static double GetDuration() => _durationSeconds;
+
+    public static void Show(string title, string body = "", string? filePath = null)
+        => Show(ToastSpec.Standard(title, body, filePath));
+
+    internal static void Show(ToastSpec spec)
+    {
+        // Guard: skip completely empty toasts (no text, no image, no color)
+        if (string.IsNullOrWhiteSpace(spec.Title)
+            && string.IsNullOrWhiteSpace(spec.Body)
+            && spec.PreviewBitmap is null
+            && spec.InlinePreviewBitmap is null
+            && !spec.SwatchColor.HasValue)
+            return;
+
+        if (!spec.SuppressSound)
+        {
+            if (spec.PlayErrorSound)
+                Services.SoundService.PlayErrorSound();
+            else
+                Services.SoundService.PlayCaptureSound();
+        }
+
+        if (_current is { _isPinned: false } current && current.TryUpdateInPlace(spec))
+            return;
+
+        ReplaceCurrentToast();
+        ToastWindow? toast = null;
+        TryShowWithCompositionFallback(
+            () =>
+            {
+                toast = new ToastWindow(spec);
+                _current = toast;
+                toast.PrepareForShow();
+                toast.Show();
+            },
+            () =>
+            {
+                if (ReferenceEquals(_current, toast))
+                    _current = null;
+                toast?.Close();
+            });
+    }
+
+    internal static bool TryShowWithCompositionFallback(
+        Action show,
+        Action cleanup,
+        Action<COMException>? reportFailure = null)
+    {
+        ArgumentNullException.ThrowIfNull(show);
+        ArgumentNullException.ThrowIfNull(cleanup);
+
+        try
+        {
+            show();
+            return true;
+        }
+        catch (COMException ex)
+        {
+            (reportFailure ?? ReportCompositionFailure)(ex);
+            try
+            {
+                cleanup();
+            }
+            catch (Exception closeEx)
+            {
+                AppDiagnostics.LogWarning("toast.show.cleanup", closeEx.Message, closeEx);
+            }
+            return false;
+        }
+    }
+
+    private static void ReportCompositionFailure(COMException exception)
+    {
+        AppDiagnostics.LogWarning(
+            "toast.show.composition-unavailable",
+            $"Windows could not create the toast window (0x{exception.HResult:X8}); the toast was skipped.",
+            exception);
+    }
+
+    public static void ShowSticker(Bitmap sticker)
+        => Show(ToastSpec.Sticker(sticker));
+
+    public static void ShowWithColor(string title, string body, Color color, bool suppressSound = false)
+        => Show(ToastSpec.WithColor(title, body, color) with { SuppressSound = suppressSound });
+
+    public static void ShowInlinePreview(Bitmap preview, string title, string body, string? filePath = null, bool suppressSound = false)
+        => Show(ToastSpec.InlinePreview(preview, title, body, filePath) with { SuppressSound = suppressSound });
+
+    public static void ShowError(string title, string body = "", string? filePath = null)
+        => Show(ToastSpec.Error(title, body, filePath));
+
+    public static void ShowImagePreview(Bitmap screenshot, string? filePath, bool autoPin, bool openHistoryEditorOnClick = false)
+    {
+        ShowImagePreview(screenshot, DefaultImagePreviewTitle, "", filePath, autoPin, openHistoryEditorOnClick);
+    }
+
+    public static void ShowImagePreview(Bitmap screenshot, string title, string body, string? filePath, bool autoPin, bool openHistoryEditorOnClick = false)
+    {
+        Show(ToastSpec.ImagePreview(
+            screenshot,
+            title,
+            body,
+            filePath,
+            autoPin,
+            transparentShell: false,
+            showOverlayButtons: true,
+            openHistoryEditorOnClick: openHistoryEditorOnClick));
+    }
+
+    public static void ShowImagePreview(Bitmap screenshot, string title, string body, string? filePath, bool autoPin, string? clickActionUrl, string? clickActionLabel)
+    {
+        Show(ToastSpec.ImagePreview(
+            screenshot,
+            title,
+            body,
+            filePath,
+            autoPin,
+            transparentShell: false,
+            showOverlayButtons: true,
+            clickActionUrl,
+            clickActionLabel));
+    }
+
+    private static void RaiseImagePreviewEditRequested(string filePath)
+    {
+        var handlers = ImagePreviewEditRequested;
+        if (handlers is null)
+            return;
+
+        foreach (Action<string> handler in handlers.GetInvocationList())
+        {
+            try { handler(filePath); }
+            catch (Exception ex) { AppDiagnostics.LogError("toast.preview-edit-request", ex); }
+        }
+    }
+
+    private static bool OpenFileLocation(string? filePath)
+    {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            return false;
+
+        try
+        {
+            System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{filePath}\"");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogWarning("toast.open-file-location", $"Failed to open file location: {ex.Message}", ex);
+            ShowError(
+                "Open failed",
+                $"OddSnap could not open the saved file location. Try again from the toast, or open the folder manually.\n{ex.Message}",
+                filePath);
+            return false;
+        }
+    }
+
+    public static void DismissCurrent()
+    {
+        _current?.RequestDismiss();
+    }
+
+    private static void ReplaceCurrentToast()
+    {
+        var current = _current;
+        if (current is null)
+            return;
+
+        if (ToastPinPolicy.CanReplaceCurrent(current._isPinned))
+        {
+            current.TryForceClose(force: true);
+            return;
+        }
+
+        _current = null;
+        if (!current._isClosed && !_retainedPinnedToasts.Contains(current))
+            _retainedPinnedToasts.Add(current);
+    }
+
+    private static void PrepareStackPlacement(ToastWindow incoming, double incomingHeight)
+    {
+        RemoveClosedRetainedToasts();
+        var matching = GetMatchingRetainedToasts(incoming._placementWorkArea, incoming._placementPosition);
+        var heights = matching.Select(toast => toast.GetPreparedHeight()).ToArray();
+        int evictionCount = ToastStackLayout.GetOldestEvictionCount(
+            heights,
+            incomingHeight,
+            Math.Max(0, incoming._placementWorkArea.Height - (Edge * 2)),
+            StackGap);
+
+        if (evictionCount > 0)
+        {
+            _isReflowingStack = true;
+            try
+            {
+                foreach (var toast in matching.Take(evictionCount).ToArray())
+                    toast.TryForceClose(force: true);
+            }
+            finally
+            {
+                _isReflowingStack = false;
+            }
+
+            matching = GetMatchingRetainedToasts(incoming._placementWorkArea, incoming._placementPosition);
+        }
+
+        incoming._stackOffset = ToastStackLayout.GetOffset(
+            matching.Select(toast => toast.GetPreparedHeight()),
+            StackGap);
+    }
+
+    private static void OnToastClosed(ToastWindow toast)
+    {
+        bool removed = _retainedPinnedToasts.Remove(toast);
+        if (!removed || _isReflowingStack || toast._placementWorkArea.IsEmpty)
+            return;
+
+        ReflowStack(toast._placementWorkArea, toast._placementPosition);
+    }
+
+    private static void ReflowStack(Rect workArea, OddSnap.Models.ToastPosition position)
+    {
+        RemoveClosedRetainedToasts();
+        double offset = 0;
+        foreach (var toast in GetMatchingRetainedToasts(workArea, position))
+        {
+            toast.ApplyStackPlacement(offset);
+            offset += toast.GetPreparedHeight() + StackGap;
+        }
+
+        if (_current is { _isClosed: false } current && current.MatchesStack(workArea, position))
+            current.ApplyStackPlacement(offset);
+    }
+
+    private static List<ToastWindow> GetMatchingRetainedToasts(
+        Rect workArea,
+        OddSnap.Models.ToastPosition position) =>
+        _retainedPinnedToasts
+            .Where(toast => !toast._isClosed && toast.MatchesStack(workArea, position))
+            .ToList();
+
+    private static void RemoveClosedRetainedToasts() =>
+        _retainedPinnedToasts.RemoveAll(toast => toast._isClosed);
+
+    private const double Edge = 8;
+
+    private static BitmapSource ToBitmapSource(Bitmap bitmap)
+    {
+        return BitmapPerf.ToBitmapSource(bitmap);
+    }
+}

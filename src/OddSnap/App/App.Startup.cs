@@ -1,0 +1,209 @@
+using System.Windows;
+using System.Windows.Threading;
+using OddSnap.Capture;
+using OddSnap.Services;
+using OddSnap.UI;
+
+namespace OddSnap;
+
+public partial class App
+{
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        if (e.Args.Any(a => a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase) || a.Equals("/uninstall", StringComparison.OrdinalIgnoreCase)))
+        {
+            base.OnStartup(e);
+            try { UninstallService.RemoveInstalledAppEntry(); } catch (Exception ex) { AppDiagnostics.LogError("startup.uninstall.remove-installed-entry", ex); }
+            try { UninstallService.RemoveStartMenuShortcut(); } catch (Exception ex) { AppDiagnostics.LogError("startup.uninstall.remove-start-menu", ex); }
+            try { UninstallService.RemoveStartupEntry(); } catch (Exception ex) { AppDiagnostics.LogError("startup.uninstall.remove-startup-entry", ex); }
+            try { UninstallService.RemoveAppData(); } catch (Exception ex) { AppDiagnostics.LogError("startup.uninstall.remove-appdata", ex); }
+            try { UninstallService.ScheduleInstallFolderRemoval(); } catch (Exception ex) { AppDiagnostics.LogError("startup.uninstall.schedule-folder-removal", ex); }
+            Shutdown();
+            return;
+        }
+
+        bool isPostInstall = e.Args.Any(a => a.Equals("--post-install", StringComparison.OrdinalIgnoreCase));
+        bool openSettingsOnStartup = e.Args.Any(a => a.Equals("--settings", StringComparison.OrdinalIgnoreCase) || a.Equals("/settings", StringComparison.OrdinalIgnoreCase));
+        bool openHistoryOnStartup = e.Args.Any(a => a.Equals("--history", StringComparison.OrdinalIgnoreCase) || a.Equals("/history", StringComparison.OrdinalIgnoreCase));
+
+        _mutex = new Mutex(false, "OddSnapScreenshotTool_SingleInstance");
+        bool acquired;
+        try
+        {
+            acquired = _mutex.WaitOne(TimeSpan.FromMilliseconds(250), false);
+        }
+        catch (AbandonedMutexException)
+        {
+            acquired = true;
+        }
+
+        if (!acquired)
+        {
+            SingleInstanceActivationService.TryActivateExisting(
+                openHistoryOnStartup
+                    ? SingleInstanceActivationRequest.OpenHistory
+                    : SingleInstanceActivationRequest.OpenSettings,
+                TimeSpan.FromMilliseconds(800));
+            base.OnStartup(e);
+            Shutdown();
+            return;
+        }
+
+        base.OnStartup(e);
+        WireUnhandledExceptionLogging();
+
+        try { UninstallService.RegisterInstalledAppEntry(); } catch (Exception ex) { AppDiagnostics.LogError("startup.register-installed-entry", ex); }
+
+        _settingsService = new SettingsService();
+        _settingsService.Load();
+        try { UninstallService.SetStartMenuShortcut(_settingsService.Settings.CreateStartMenuShortcut); } catch (Exception ex) { AppDiagnostics.LogError("startup.sync-start-menu-shortcut", ex); }
+        SingleInstanceActivationService.Start(HandleSingleInstanceActivation);
+        _settingsService.SaveFailed += message =>
+        {
+            _ = TryPostToAppDispatcher(
+                () => ToastWindow.ShowError("Settings save failed", string.IsNullOrWhiteSpace(message) ? "OddSnap could not write settings." : message),
+                DispatcherPriority.Background,
+                "startup.settings-save-failed-post");
+        };
+        LocalizationService.ApplyCurrentCulture(_settingsService.Settings.InterfaceLanguage);
+        BackgroundRuntimeJobService.NotificationRequested += BackgroundRuntimeJobService_NotificationRequested;
+        BackgroundRuntimeJobService.Initialize();
+        StartBackgroundPreloads();
+
+        if (isPostInstall)
+            _settingsService.Settings.HasCompletedSetup = false;
+
+        try { SyncStartupRegistry(_settingsService.Settings.StartWithWindows); } catch (Exception ex) { AppDiagnostics.LogError("startup.sync-startup-registry", ex); }
+        System.Windows.Forms.Application.EnableVisualStyles();
+        SoundService.Muted = _settingsService.Settings.MuteSounds;
+        SoundService.SetPack(_settingsService.Settings.SoundPack);
+        UI.Motion.Disabled = _settingsService.Settings.DisableAnimations;
+        UiScale.Set(_settingsService.Settings.UiScale);
+        Theme.Refresh();
+        Theme.ApplyTo(Resources);
+        OddSnapUiCaptureVisibility.SetShowInScreenshots(_settingsService.Settings.ShowOddSnapUiInScreenshots);
+        Helpers.UiChrome.DetectRefreshRate();
+        ToastWindow.SetPosition(_settingsService.Settings.ToastPosition);
+        ToastWindow.SetDuration(_settingsService.Settings.ToastDurationSeconds);
+        ToastWindow.SetButtonLayout(_settingsService.Settings.ToastButtons);
+        ToastWindow.SetFadeOutBehavior(_settingsService.Settings.ToastFadeOutEnabled, _settingsService.Settings.ToastFadeOutSeconds);
+        ScreenCapture.HdrCaptureCompatibleMode = _settingsService.Settings.HdrCaptureCompatibleMode;
+
+        _idleTrimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        _idleTrimTimer.Tick += (_, _) => TrimIdleMemory();
+        ScheduleIdleMemoryTrim();
+
+        bool openSettingsAfterWizard = false;
+        if (!_settingsService.Settings.HasCompletedSetup)
+        {
+            var wizard = new SetupWizard(_settingsService);
+            wizard.ShowDialog();
+            openSettingsAfterWizard = wizard.Tag as string == "OpenSettings";
+        }
+
+        ConfigureTrayIcon();
+        ToastWindow.ImagePreviewEditRequested += OnImagePreviewEditRequested;
+        // Register F10 immediately. Any press received while the capture thread
+        // is warming remains queued on the WPF dispatcher instead of being lost.
+        RegisterHotkeys();
+        CaptureOverlayThread.Start();
+        CaptureOverlayThread.PostAndWait(CaptureOverlayHotPathWarmup.Warm);
+        try
+        {
+            ScreenCapture.WarmLowLatencyCapture();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("startup.low-latency-capture-warmup", ex);
+        }
+        WarmDxgiCapture();
+        Helpers.FluentIcons.Preload();
+
+        if (_settingsService.Settings.AutoCheckForUpdates)
+            _ = CheckForUpdatesOnStartupAsync();
+
+        if (openHistoryOnStartup)
+            ShowHistory();
+        else if (openSettingsAfterWizard || openSettingsOnStartup)
+            ShowSettings();
+    }
+
+    private void BackgroundRuntimeJobService_NotificationRequested(BackgroundRuntimeJobNotification notification)
+    {
+        _ = TryPostToAppDispatcher(
+            () =>
+            {
+                if (notification.IsError)
+                    ToastWindow.ShowError(notification.Title, notification.Body);
+                else
+                    ToastWindow.Show(notification.Title, notification.Body);
+            },
+            DispatcherPriority.Background,
+            "runtime-jobs.notification-post");
+    }
+
+    private void WireUnhandledExceptionLogging()
+    {
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+                AppDiagnostics.LogError("appdomain.unhandled", ex);
+            else
+                AppDiagnostics.LogWarning("appdomain.unhandled", args.ExceptionObject?.ToString() ?? "Unknown unhandled exception.");
+        };
+        DispatcherUnhandledException += (_, args) => AppDiagnostics.LogError("dispatcher.unhandled", args.Exception);
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            AppDiagnostics.LogError("tasks.unobserved", args.Exception);
+            args.SetObserved();
+        };
+    }
+
+    private void StartBackgroundPreloads()
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var historyService = EnsureHistoryService();
+                _ = EnsureImageSearchIndexService();
+                SettingsWindow.WarmHistoryThumbsInBackground(historyService.ImageEntries, maxCount: 24, immediateCount: 4, batchSize: 4);
+            }
+            catch (Exception ex)
+            {
+                AppDiagnostics.LogError("startup.preload-history-search", ex);
+            }
+        });
+    }
+
+    private void ConfigureTrayIcon()
+    {
+        _trayIcon = new TrayIcon(_settingsService?.Settings);
+        _trayIcon.OnCapture += OnHotkeyPressed;
+        _trayIcon.OnFullScreenCapture += OnFullscreenHotkeyPressed;
+        _trayIcon.OnOcr += OnOcrHotkeyPressed;
+        _trayIcon.OnColorPicker += OnPickerHotkeyPressed;
+        _trayIcon.OnGifRecord += OnGifHotkeyPressed;
+        _trayIcon.OnScrollCapture += OnScrollCaptureHotkeyPressed;
+        _trayIcon.OnSettings += () => ShowSettings();
+        _trayIcon.OnHistory += ShowHistory;
+        _trayIcon.OnQuit += () => Shutdown();
+    }
+
+    private static void WarmDxgiCapture()
+    {
+        _ = Task.Run(() =>
+        {
+            try { OddSnap.Capture.DxgiScreenCapture.WarmUp(); } catch (Exception ex) { AppDiagnostics.LogError("startup.dxgi-warmup", ex); }
+        });
+    }
+
+    private static void WarmLowLatencyCapture()
+    {
+        _ = Task.Run(() =>
+        {
+            try { ScreenCapture.WarmLowLatencyCapture(); } catch (Exception ex) { AppDiagnostics.LogError("startup.low-latency-capture-warmup", ex); }
+        });
+    }
+
+}

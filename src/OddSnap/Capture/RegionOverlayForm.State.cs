@@ -1,0 +1,640 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using OddSnap.Helpers;
+using OddSnap.Models;
+using OddSnap.Services;
+
+namespace OddSnap.Capture;
+
+public sealed partial class RegionOverlayForm
+{
+    public static Bitmap RenderEditorProject(
+        Bitmap baseImage,
+        IReadOnlyList<Annotation> annotations,
+        bool strokeShadow = true)
+    {
+        using var source = new Bitmap(baseImage);
+        using var renderer = new RegionOverlayForm(
+            source,
+            new Rectangle(0, 0, source.Width, source.Height),
+            CaptureMode.Select,
+            WindowDetectionMode.Off,
+            CenterSelectionAspectRatio.Free,
+            editorMode: true,
+            editorAnnotations: annotations)
+        {
+            DetectWindows = false,
+            ShowCaptureMagnifier = false,
+            AnnotationStrokeShadow = strokeShadow
+        };
+        return renderer.RenderAnnotatedBitmap();
+    }
+
+    public EditableCaptureData? CreateEditableCaptureData(Rectangle selection)
+    {
+        if (_undoStack.Count == 0 || selection.Width <= 0 || selection.Height <= 0)
+            return null;
+
+        var annotations = _undoStack
+            .Where(annotation => GetAnnotationBounds(annotation).IntersectsWith(selection))
+            .Select(annotation => EditableScreenshotService.Translate(annotation, -selection.X, -selection.Y))
+            .ToList();
+        if (annotations.Count == 0)
+            return null;
+
+        var baseImage = ScreenCapture.CropRegion(_screenshot, selection);
+        return new EditableCaptureData(baseImage, annotations);
+    }
+
+    public (Bitmap BaseImage, IReadOnlyList<Annotation> Annotations) CreateEditorProjectSnapshot()
+        => (new Bitmap(_screenshot), _undoStack.ToList());
+
+    private void RequestEditorSave()
+    {
+        if (!_editorMode)
+            return;
+        if (_isTyping)
+            CommitText();
+        CancelActivePointerInteraction();
+        EditorSaveRequested?.Invoke();
+    }
+
+    public void CloseAfterEditorSave()
+    {
+        _allowDeactivation = true;
+        HideToolbarImmediately();
+        Hide();
+        Close();
+    }
+
+    public CaptureMode CurrentMode => _mode;
+    public void SetShowToolNumberBadges(bool show)
+    {
+        _showToolNumberBadges = show;
+        RefreshToolbar();
+    }
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShowCrosshairGuides { get; set; }
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool AnnotationStrokeShadow { get; set; } = true;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool DetectWindows { get; set; } = true;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShowCaptureMagnifier { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public CaptureDockSide CaptureDockSide { get; set; } = CaptureDockSide.Top;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShowToolbar { get; set; } = true;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public double UiScale
+    {
+        get => Helpers.UiChrome.UiScale;
+        set
+        {
+            Helpers.UiChrome.SetUiScale(value);
+            RefreshToolbar();
+        }
+    }
+
+    private bool IsVerticalDock => CaptureDockSide is CaptureDockSide.Left or CaptureDockSide.Right;
+    private bool IsBottomDock => CaptureDockSide == CaptureDockSide.Bottom;
+    private bool IsRightDock => CaptureDockSide == CaptureDockSide.Right;
+
+    public void SetEnabledTools(List<string>? enabledIds)
+    {
+        if (enabledIds == null)
+        {
+            var defaultEnabled = ToolDef.DefaultEnabledIds();
+            _visibleTools = ToolDef.AllTools.Where(t => defaultEnabled.Contains(t.Id)).ToArray();
+        }
+        else
+        {
+            _visibleTools = ToolDef.AllTools.Where(t => enabledIds.Contains(t.Id)).ToArray();
+        }
+
+        RefreshToolHotkeyCache();
+        RefreshToolbar();
+    }
+
+    public void SetToolbarLayout(List<string>? orderedIds, List<string>? pinnedIds)
+    {
+        _toolbarToolOrderIds = orderedIds;
+        _toolbarPinnedToolIds = pinnedIds;
+        RefreshToolbar();
+    }
+
+    private void RefreshToolHotkeyCache()
+    {
+        _toolHotkeysById.Clear();
+        _annotationHotkeysByChord.Clear();
+
+        var settings = Services.SettingsService.LoadStatic();
+        if (settings is null)
+            return;
+
+        foreach (var tool in _visibleTools)
+        {
+            var (mod, key) = settings.GetToolHotkey(tool.Id);
+            if (key == 0)
+                continue;
+
+            _toolHotkeysById[tool.Id] = (mod, key);
+
+            if (tool.Group == 1 && tool.Mode.HasValue)
+                _annotationHotkeysByChord.TryAdd((mod, key), tool);
+        }
+    }
+
+    private (uint Modifiers, uint Key) GetCachedToolHotkey(string toolId)
+        => _toolHotkeysById.TryGetValue(toolId, out var hotkey) ? hotkey : (0u, 0u);
+
+    private string[] GetSelectionReadoutDetails(Point cursor) =>
+    [
+        $"X {_virtualBounds.X + cursor.X}",
+        $"Y {_virtualBounds.Y + cursor.Y}",
+    ];
+
+    // All system fonts, cached once
+    private static string[]? _allSystemFonts;
+    private static string[] GetSystemFonts()
+    {
+        if (_allSystemFonts != null) return _allSystemFonts;
+        using var fonts = new System.Drawing.Text.InstalledFontCollection();
+        _allSystemFonts = fonts.Families
+            .Select(f => f.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return _allSystemFonts;
+    }
+
+    private string[] GetFilteredFonts()
+    {
+        if (_filteredFonts != null) return _filteredFonts;
+        var all = GetSystemFonts();
+        if (string.IsNullOrEmpty(_fontSearch))
+        {
+            _filteredFonts = all;
+            return _filteredFonts;
+        }
+        var terms = _fontSearch.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        _filteredFonts = all.Where(f =>
+        {
+            foreach (var term in terms)
+                if (f.IndexOf(term, StringComparison.OrdinalIgnoreCase) < 0)
+                    return false;
+            return true;
+        }).ToArray();
+        return _filteredFonts;
+    }
+
+    private Rectangle GetOverlayUiBounds()
+    {
+        Rectangle bounds = Rectangle.Empty;
+        static Rectangle InflateIfNeeded(Rectangle r, int pad)
+        {
+            if (r.Width <= 0 || r.Height <= 0) return Rectangle.Empty;
+            r.Inflate(pad, pad);
+            return r;
+        }
+
+        void Add(Rectangle r)
+        {
+            if (r.IsEmpty) return;
+            bounds = bounds.IsEmpty ? r : Rectangle.Union(bounds, r);
+        }
+
+        Add(InflateIfNeeded(_toolbarRect, Helpers.UiChrome.ScaleInt(12)));
+        Add(InflateForRepaint(Rectangle.Round(GetTextToolbarBounds())));
+        Add(InflateForRepaint(Rectangle.Round(GetActiveTextRect())));
+        Add(InflateIfNeeded(GetColorPickerBounds(), Helpers.UiChrome.ScaleInt(12)));
+        Add(InflateIfNeeded(GetFontPickerBounds(), Helpers.UiChrome.ScaleInt(12)));
+        Add(InflateIfNeeded(GetEmojiPickerBounds(), Helpers.UiChrome.ScaleInt(12)));
+        return bounds;
+    }
+
+    private bool IsPointInOverlayUi(Point p)
+    {
+        if (IsPointInToolbarChrome(p)) return true;
+        if (_emojiPickerOpen && _emojiPickerRect.Contains(p)) return true;
+        if (_fontPickerOpen && _fontPickerRect.Contains(p)) return true;
+        if (_colorPickerOpen && _colorPickerRect.Contains(p)) return true;
+        return false;
+    }
+
+    private bool IsPointInToolbarChrome(Point p)
+    {
+        if (!IsToolbarInteractive())
+            return false;
+
+        var tbBounds = _toolbarRect;
+        tbBounds.Inflate(Helpers.UiChrome.ScaleInt(8), Helpers.UiChrome.ScaleInt(8));
+        if (IsVerticalDock)
+            tbBounds.Width += Helpers.UiChrome.ScaleInt(10);
+        else
+            tbBounds.Height += Helpers.UiChrome.ScaleInt(10);
+        return tbBounds.Contains(p);
+    }
+
+    private Rectangle PositionPopupFromAnchor(Rectangle anchor, int width, int height, int gap = -1)
+    {
+        if (gap < 0)
+            gap = Helpers.UiChrome.ScaledPopupGap;
+        var clampBounds = GetToolbarAnchorClientBounds();
+        int x;
+        int y;
+
+        if (IsVerticalDock)
+        {
+            x = IsRightDock ? anchor.X - width - gap : anchor.Right + gap;
+            y = anchor.Y + (anchor.Height / 2) - (height / 2);
+            var margin = Helpers.UiChrome.ScaleInt(8);
+            y = Math.Clamp(y, clampBounds.Top + margin, Math.Max(clampBounds.Top + margin, clampBounds.Bottom - height - margin));
+            x = Math.Clamp(x, clampBounds.Left + margin, Math.Max(clampBounds.Left + margin, clampBounds.Right - width - margin));
+        }
+        else
+        {
+            x = anchor.X + (anchor.Width / 2) - (width / 2);
+            y = IsBottomDock ? anchor.Y - height - gap : anchor.Bottom + gap;
+            var margin = Helpers.UiChrome.ScaleInt(8);
+            x = Math.Clamp(x, clampBounds.Left + margin, Math.Max(clampBounds.Left + margin, clampBounds.Right - width - margin));
+            y = Math.Clamp(y, clampBounds.Top + margin, Math.Max(clampBounds.Top + margin, clampBounds.Bottom - height - margin));
+        }
+
+        return new Rectangle(x, y, width, height);
+    }
+
+    private bool ShouldShowCaptureMagnifierAt(Point p)
+        => ShowCaptureMagnifier
+           && ToolDef.IsCaptureTool(_mode)
+           && !IsPointInOverlayUi(p);
+
+    private Point GetReadoutCursorPoint()
+        => _selectionEnd != Point.Empty ? _selectionEnd : _lastCursorPos;
+
+    private bool IsSelectionCaptureMode()
+        => _mode is CaptureMode.Rectangle or CaptureMode.Center or CaptureMode.Ocr or CaptureMode.Scan or CaptureMode.Sticker or CaptureMode.Upscale;
+
+    private void InvalidateAutoDetectChrome(Rectangle oldDetect, Rectangle newDetect)
+    {
+        if (!IsSelectionCaptureMode() || _isSelecting || _hasSelection)
+            return;
+
+        if (oldDetect.IsEmpty != newDetect.IsEmpty)
+        {
+            Invalidate();
+            return;
+        }
+
+        var oldDirty = InflateForRepaint(oldDetect);
+        var newDirty = InflateForRepaint(newDetect);
+        if (!oldDirty.IsEmpty && !newDirty.IsEmpty)
+        {
+            Invalidate(Rectangle.Union(oldDirty, newDirty));
+        }
+        else if (!oldDirty.IsEmpty)
+            Invalidate(oldDirty);
+        else if (!newDirty.IsEmpty)
+            Invalidate(newDirty);
+    }
+
+    private void QueueAutoDetectRectUpdate(Point location)
+    {
+        if (_windowDetectionMode == WindowDetectionMode.Off)
+        {
+            var previousDetect = _autoDetectRect;
+            ResetAutoDetectUpdateQueue();
+            _autoDetectRect = Rectangle.Empty;
+            _autoDetectActive = false;
+            InvalidateAutoDetectChrome(previousDetect, Rectangle.Empty);
+            return;
+        }
+
+        _pendingAutoDetectPoint = location;
+
+        var now = Environment.TickCount64;
+        if (_lastAutoDetectFrameMs == 0 || now - _lastAutoDetectFrameMs >= UiChrome.FrameIntervalMs)
+        {
+            _autoDetectQueued = false;
+            _autoDetectTimer.Stop();
+            UpdateAutoDetectRect(location);
+            _lastAutoDetectFrameMs = now;
+            return;
+        }
+
+        _autoDetectQueued = true;
+        if (_autoDetectTimer.Enabled)
+            return;
+
+        var remaining = UiChrome.FrameIntervalMs - (int)Math.Min(int.MaxValue, now - _lastAutoDetectFrameMs);
+        _autoDetectTimer.Interval = Math.Max(1, remaining);
+        _autoDetectTimer.Start();
+    }
+
+    private void FlushPendingAutoDetectRectUpdate()
+    {
+        _autoDetectTimer.Stop();
+        if (!_autoDetectQueued)
+            return;
+
+        _autoDetectQueued = false;
+        if (_isSelecting ||
+            !ToolDef.IsCaptureTool(_mode) ||
+            _mode == CaptureMode.Center ||
+            IsPointInOverlayUi(_pendingAutoDetectPoint))
+        {
+            return;
+        }
+
+        UpdateAutoDetectRect(_pendingAutoDetectPoint);
+        _lastAutoDetectFrameMs = Environment.TickCount64;
+    }
+
+    private void ResetAutoDetectUpdateQueue()
+    {
+        _autoDetectTimer.Stop();
+        _autoDetectQueued = false;
+        _pendingAutoDetectPoint = Point.Empty;
+        _lastAutoDetectFrameMs = 0;
+    }
+
+    private void UpdateAutoDetectRect(Point location)
+    {
+        if (_windowDetectionMode == WindowDetectionMode.Off)
+        {
+            var previousDetect = _autoDetectRect;
+            _autoDetectRect = Rectangle.Empty;
+            _autoDetectActive = false;
+            InvalidateAutoDetectChrome(previousDetect, Rectangle.Empty);
+            return;
+        }
+
+        if (!WindowDetector.TryGetSnapshotDetectionRectAtPoint(
+                location, _virtualBounds, _windowDetectionMode, out var detected))
+        {
+            detected = WindowDetector.GetFastDetectionRectAtPoint(
+                location,
+                _virtualBounds,
+                _windowDetectionMode);
+        }
+
+        var oldDetect = _autoDetectRect;
+        _autoDetectRect = detected;
+        _autoDetectActive = detected.Width > 0 && detected.Height > 0;
+
+        if (oldDetect == detected)
+            return;
+
+        InvalidateAutoDetectChrome(oldDetect, detected);
+    }
+
+    private void MarkCommittedAnnotationsDirty()
+    {
+        _committedAnnotationsDirty = true;
+    }
+
+    private void AddAnnotation(Annotation annotation)
+    {
+        _undoStack.Add(annotation);
+        _redoStack.Clear();
+        MarkCommittedAnnotationsDirty();
+        NotifyEditorContentChanged();
+    }
+
+    /// <summary>Returns the bounding rectangle for any annotation type, for hit-testing.</summary>
+    private static Rectangle GetAnnotationBounds(Annotation a) => a switch
+    {
+        ArrowAnnotation arr => RectFromPoints(arr.From, arr.To, 8),
+        CurvedArrowAnnotation ca => BoundsOfPoints(ca.Points, 8),
+        LineAnnotation ln => RectFromPoints(ln.From, ln.To, 6),
+        RulerAnnotation ru => GetRulerPaintBounds(ru.From, ru.To),
+        DrawStroke ds => BoundsOfPoints(ds.Points, 4),
+        BlurRect br => br.Rect,
+        HighlightAnnotation hl => hl.Rect,
+        RectShapeAnnotation rs => rs.Rect,
+        CircleShapeAnnotation cs => cs.Rect,
+        EraserFill ef => ef.Rect,
+        StepNumberAnnotation sn => new Rectangle(sn.Pos.X - 14, sn.Pos.Y - 14, 28, 28),
+        EmojiAnnotation em => new Rectangle(em.Pos.X, em.Pos.Y, (int)em.Size, (int)em.Size),
+        MagnifierAnnotation mg => GetMagnifierPaintBounds(mg.Pos, mg.SrcRect, Size.Empty),
+        TextAnnotation ta => GetTextBounds(ta),
+        _ => Rectangle.Empty
+    };
+
+    private static Rectangle RectFromPoints(Point a, Point b, int pad)
+    {
+        int x = Math.Min(a.X, b.X) - pad;
+        int y = Math.Min(a.Y, b.Y) - pad;
+        int w = Math.Abs(b.X - a.X) + pad * 2;
+        int h = Math.Abs(b.Y - a.Y) + pad * 2;
+        return new Rectangle(x, y, w, h);
+    }
+
+    private static Rectangle BoundsOfPoints(List<Point> pts, int pad)
+    {
+        if (pts.Count == 0) return Rectangle.Empty;
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+        foreach (var p in pts) { minX = Math.Min(minX, p.X); minY = Math.Min(minY, p.Y); maxX = Math.Max(maxX, p.X); maxY = Math.Max(maxY, p.Y); }
+        return new Rectangle(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
+    }
+
+    private static Rectangle GetTextBounds(TextAnnotation ta)
+        => Rectangle.Ceiling(MeasureTextRect(
+            ta.Pos,
+            ta.Text,
+            ta.FontSize,
+            ta.FontFamily,
+            ta.Bold,
+            ta.Italic,
+            ta.Background));
+
+    /// <summary>Hit-tests all annotations in reverse order (top-most first). Returns index or -1.</summary>
+    private int HitTestAnnotation(Point p)
+    {
+        for (int i = _undoStack.Count - 1; i >= 0; i--)
+        {
+            var bounds = GetAnnotationBounds(_undoStack[i]);
+            if (bounds.Contains(p))
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Moves an annotation by a delta. Returns a new annotation with updated position.</summary>
+    private static Annotation MoveAnnotation(Annotation a, int dx, int dy) => a switch
+    {
+        ArrowAnnotation arr => arr with { From = Offset(arr.From, dx, dy), To = Offset(arr.To, dx, dy) },
+        CurvedArrowAnnotation ca => ca with { Points = ca.Points.Select(p => Offset(p, dx, dy)).ToList() },
+        LineAnnotation ln => ln with { From = Offset(ln.From, dx, dy), To = Offset(ln.To, dx, dy) },
+        RulerAnnotation ru => ru with { From = Offset(ru.From, dx, dy), To = Offset(ru.To, dx, dy) },
+        DrawStroke ds => ds with { Points = ds.Points.Select(p => Offset(p, dx, dy)).ToList() },
+        BlurRect br => br with { Rect = OffsetRect(br.Rect, dx, dy) },
+        HighlightAnnotation hl => hl with { Rect = OffsetRect(hl.Rect, dx, dy) },
+        RectShapeAnnotation rs => rs with { Rect = OffsetRect(rs.Rect, dx, dy) },
+        CircleShapeAnnotation cs => cs with { Rect = OffsetRect(cs.Rect, dx, dy) },
+        EraserFill ef => ef with { Rect = OffsetRect(ef.Rect, dx, dy) },
+        StepNumberAnnotation sn => sn with { Pos = Offset(sn.Pos, dx, dy) },
+        EmojiAnnotation em => em with { Pos = Offset(em.Pos, dx, dy) },
+        MagnifierAnnotation mg => mg with { Pos = Offset(mg.Pos, dx, dy) },
+        TextAnnotation ta => ta with { Pos = Offset(ta.Pos, dx, dy) },
+        _ => a
+    };
+
+    private static Point Offset(Point p, int dx, int dy) => new(p.X + dx, p.Y + dy);
+    private static Rectangle OffsetRect(Rectangle r, int dx, int dy) => new(r.X + dx, r.Y + dy, r.Width, r.Height);
+
+    /// <summary>Returns the handle index (0=TL,1=TR,2=BL,3=BR) at point, or -1.</summary>
+    private int GetSelectHandle(Point p)
+    {
+        if (_selectedAnnotationIndex < 0 || _selectedAnnotationIndex >= _undoStack.Count)
+            return -1;
+        var bounds = GetAnnotationBounds(_undoStack[_selectedAnnotationIndex]);
+        var selRect = Rectangle.Inflate(bounds, 4, 4);
+        var corners = new[] {
+            new Point(selRect.X, selRect.Y),
+            new Point(selRect.Right - 1, selRect.Y),
+            new Point(selRect.X, selRect.Bottom - 1),
+            new Point(selRect.Right - 1, selRect.Bottom - 1),
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            var hr = WindowsHandleRenderer.HitRect(corners[i]);
+            if (hr.Contains(p)) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Scales an annotation by adjusting its bounds from a corner handle drag.</summary>
+    private static Annotation ScaleAnnotation(Annotation a, Rectangle oldBounds, Rectangle newBounds)
+    {
+        if (oldBounds.Width <= 0 || oldBounds.Height <= 0) return a;
+        double sx = (double)newBounds.Width / oldBounds.Width;
+        double sy = (double)newBounds.Height / oldBounds.Height;
+        int ox = newBounds.X - (int)(oldBounds.X * sx);
+        int oy = newBounds.Y - (int)(oldBounds.Y * sy);
+
+        Point ScalePt(Point p) => new((int)(p.X * sx) + ox, (int)(p.Y * sy) + oy);
+        Rectangle ScaleRect(Rectangle r) => new((int)(r.X * sx) + ox, (int)(r.Y * sy) + oy,
+            Math.Max(1, (int)(r.Width * sx)), Math.Max(1, (int)(r.Height * sy)));
+
+        return a switch
+        {
+            ArrowAnnotation arr => arr with { From = ScalePt(arr.From), To = ScalePt(arr.To) },
+            LineAnnotation ln => ln with { From = ScalePt(ln.From), To = ScalePt(ln.To) },
+            RulerAnnotation ru => ru with { From = ScalePt(ru.From), To = ScalePt(ru.To) },
+            BlurRect br => br with { Rect = ScaleRect(br.Rect) },
+            HighlightAnnotation hl => hl with { Rect = ScaleRect(hl.Rect) },
+            RectShapeAnnotation rs => rs with { Rect = ScaleRect(rs.Rect) },
+            CircleShapeAnnotation cs => cs with { Rect = ScaleRect(cs.Rect) },
+            EraserFill ef => ef with { Rect = ScaleRect(ef.Rect) },
+            EmojiAnnotation em => em with { Pos = ScalePt(em.Pos), Size = Math.Max(8f, em.Size * (float)Math.Max(sx, sy)) },
+            TextAnnotation ta => ta with { Pos = ScalePt(ta.Pos), FontSize = Math.Clamp(ta.FontSize * (float)Math.Max(sx, sy), 10f, 120f) },
+            StepNumberAnnotation sn => sn with { Pos = ScalePt(sn.Pos) },
+            DrawStroke ds => ds with { Points = ds.Points.Select(p => ScalePt(p)).ToList() },
+            CurvedArrowAnnotation ca => ca with { Points = ca.Points.Select(p => ScalePt(p)).ToList() },
+            _ => a
+        };
+    }
+
+    private bool RemoveAnnotation(Annotation annotation)
+    {
+        bool removed = _undoStack.Remove(annotation);
+        if (removed)
+        {
+            _redoStack.Clear();
+            MarkCommittedAnnotationsDirty();
+        }
+        return removed;
+    }
+
+    private void CommitSelectTransform()
+    {
+        bool changed = false;
+        if (_selectedAnnotationIndex >= 0 &&
+            _selectedAnnotationIndex < _undoStack.Count &&
+            _selectPreviewAnnotation is not null)
+        {
+            _undoStack[_selectedAnnotationIndex] = _selectPreviewAnnotation;
+            _redoStack.Clear();
+            MarkCommittedAnnotationsDirty();
+            changed = true;
+        }
+
+        _selectPreviewAnnotation = null;
+        if (_renderSkipIndex >= 0)
+        {
+            _renderSkipIndex = -1;
+            MarkCommittedAnnotationsDirty();
+        }
+        if (changed)
+            NotifyEditorContentChanged();
+    }
+
+    private void NotifyEditorContentChanged()
+    {
+        if (_editorMode)
+            EditorContentChanged?.Invoke();
+    }
+
+    private Annotation RemoveLastAnnotation()
+    {
+        var last = _undoStack[^1];
+        _undoStack.RemoveAt(_undoStack.Count - 1);
+        MarkCommittedAnnotationsDirty();
+        return last;
+    }
+
+    private void RestoreAnnotation(Annotation annotation)
+    {
+        _undoStack.Add(annotation);
+        MarkCommittedAnnotationsDirty();
+    }
+
+    private bool ShouldCacheCommittedAnnotationsBitmap()
+        => (long)_bmpW * _bmpH <= MaxCommittedAnnotationCachePixels;
+
+    private void DisposeCommittedAnnotationsBitmap()
+    {
+        _committedAnnotationsBitmap?.Dispose();
+        _committedAnnotationsBitmap = null;
+    }
+
+    private Bitmap GetCommittedAnnotationsBitmap()
+    {
+        if (_undoStack.Count == 0 && _renderSkipIndex < 0)
+        {
+            DisposeCommittedAnnotationsBitmap();
+            _committedAnnotationsDirty = false;
+            return _screenshot;
+        }
+
+        if (!_committedAnnotationsDirty && _committedAnnotationsBitmap is not null)
+            return _committedAnnotationsBitmap;
+
+        DisposeCommittedAnnotationsBitmap();
+        var bitmap = CreateCommittedAnnotationsBitmap();
+        _committedAnnotationsBitmap = bitmap;
+        _committedAnnotationsDirty = false;
+        return bitmap;
+    }
+
+    private Bitmap CreateCommittedAnnotationsBitmap()
+    {
+        var bitmap = new Bitmap(_bmpW, _bmpH, PixelFormat.Format32bppPArgb);
+        using var g = Graphics.FromImage(bitmap);
+        g.CompositingMode = CompositingMode.SourceCopy;
+        g.DrawImageUnscaled(_screenshot, 0, 0);
+        g.CompositingMode = CompositingMode.SourceOver;
+        RenderAnnotationsTo(g);
+        return bitmap;
+    }
+}

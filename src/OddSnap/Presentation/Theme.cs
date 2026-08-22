@@ -1,0 +1,166 @@
+using System.Diagnostics;
+using System.Windows.Media;
+using Color = System.Windows.Media.Color;
+
+namespace OddSnap.Presentation;
+
+// Centralized theme colors.
+public static class Theme
+{
+    public static bool IsDark { get; private set; } = true;
+
+    // Backgrounds — Windows 11 Settings-inspired
+    public static Color BgPrimary => IsDark ? C(31, 31, 31) : C(243, 243, 243);
+    public static Color BgSecondary => IsDark ? C(30, 30, 30) : C(249, 249, 249);
+    public static Color BgElevated => IsDark ? C(45, 45, 45) : C(255, 255, 255);
+    public static Color BgHover => IsDark ? C(55, 55, 55) : C(229, 229, 229);
+    public static Color BgCard => IsDark ? C(45, 45, 45) : C(255, 255, 255);
+    public static Color BgOverlay => IsDark ? CA(0, 0, 0, 140) : CA(0, 0, 0, 100);
+
+    // Text
+    public static Color TextPrimary => IsDark ? C(245, 245, 245) : C(26, 26, 26);
+    public static Color TextSecondary => IsDark ? C(162, 162, 162) : C(96, 96, 96);
+    public static Color TextMuted => IsDark ? C(110, 110, 110) : C(128, 128, 128);
+
+    // Borders
+    public static Color Border => IsDark ? CA(255, 255, 255, 40) : CA(0, 0, 0, 22);
+    public static Color BorderSubtle => IsDark ? CA(255, 255, 255, 24) : CA(0, 0, 0, 14);
+
+    // Shared stroke: the one white outline used on preview, toast, buttons, cards
+    public static Color Stroke => IsDark ? CA(255, 255, 255, 0xCC) : CA(0, 0, 0, 0x40);
+    public const double StrokeThickness = 1.5;
+    public static SolidColorBrush StrokeBrush() => Brush(Stroke);
+
+    // Accent (monochrome - white tint in dark, dark tint in light)
+    public static Color Accent => IsDark ? C(255, 255, 255) : C(0, 0, 0);
+    public static Color AccentSubtle => IsDark ? CA(255, 255, 255, 15) : CA(0, 0, 0, 18);
+    public static Color AccentHover => IsDark ? CA(255, 255, 255, 25) : CA(0, 0, 0, 28);
+    public static Color DangerHover => IsDark ? CA(196, 43, 28, 210) : CA(196, 43, 28, 225);
+
+    // Selection
+    public static Color SelectionBg => IsDark ? CA(255, 255, 255, 20) : CA(0, 0, 0, 10);
+
+    // Window chrome
+    public static Color TitleBar => IsDark ? C(26, 26, 26) : C(240, 240, 240);
+    public static Color WindowBorder => IsDark ? CA(255, 255, 255, 18) : CA(0, 0, 0, 20);
+    public static Color CardBg => IsDark ? C(45, 45, 45) : C(255, 255, 255);
+    public static Color TabActiveBg => IsDark ? CA(255, 255, 255, 21) : CA(0, 0, 0, 16);
+    public static Color TabHoverBg => IsDark ? CA(255, 255, 255, 12) : CA(0, 0, 0, 10);
+    public static Color PreviewStroke => IsDark ? CA(0, 0, 0, 64) : CA(0, 0, 0, 25);
+
+    // Section icon tints
+    public static Color SectionIconBg => IsDark ? CA(255, 255, 255, 14) : CA(0, 0, 0, 8);
+    public static Color SectionIconFg => IsDark ? CA(255, 255, 255, 200) : CA(0, 0, 0, 170);
+
+    // Separator
+    public static Color Separator => IsDark ? CA(255, 255, 255, 16) : CA(0, 0, 0, 10);
+
+    // Toast background (needs to be opaque enough to read)
+    public static Color ToastBg => IsDark ? C(48, 48, 48) : C(252, 252, 252);
+    public static Color ToastBorder => IsDark ? CA(255, 255, 255, 30) : CA(0, 0, 0, 18);
+
+    // Loading shimmer overlay (OCR translation, upscale preview)
+    public static Color Shimmer => IsDark ? CA(255, 255, 255, 20) : CA(0, 0, 0, 18);
+
+    // Floating capture chrome (rendered via GDI on the WinForms capture surfaces).
+    // Helpers.UiChrome converts these to System.Drawing colors — add new surface
+    // tokens here, not there, so the WPF and GDI palettes cannot drift.
+    public static Color SurfaceWindowBackground => IsDark ? C(28, 28, 28) : C(245, 245, 245);
+    public static Color SurfaceBackground => IsDark ? C(32, 32, 32) : C(252, 252, 252);
+    public static Color SurfaceElevated => IsDark ? C(44, 44, 44) : C(255, 255, 255);
+    public static Color SurfaceBorder => IsDark ? CA(255, 255, 255, 24) : CA(0, 0, 0, 24);
+    public static Color SurfaceBorderStrong => IsDark ? CA(255, 255, 255, 34) : CA(0, 0, 0, 36);
+    public static Color SurfaceBorderSubtle => IsDark ? CA(255, 255, 255, 16) : CA(0, 0, 0, 14);
+    public static Color SurfaceTextPrimary => IsDark ? C(255, 255, 255) : C(24, 24, 24);
+    public static Color SurfaceTextSecondary => IsDark ? CA(255, 255, 255, 190) : CA(0, 0, 0, 120);
+    public static Color SurfaceTextMuted => IsDark ? CA(255, 255, 255, 120) : CA(0, 0, 0, 90);
+    public static Color SurfaceHover => IsDark ? CA(255, 255, 255, 22) : CA(0, 0, 0, 14);
+    public static Color SurfacePill => IsDark ? C(44, 44, 44) : C(255, 255, 255);
+    public static Color SurfaceTooltip => IsDark ? C(48, 48, 48) : C(255, 255, 255);
+    public static Color SurfaceShadow => CA(0, 0, 0, IsDark ? (byte)60 : (byte)34);
+    public static Color SurfaceDimOverlay => CA(0, 0, 0, IsDark ? (byte)35 : (byte)18);
+    public static Color SurfaceSelectionOverlay => CA(0, 0, 0, IsDark ? (byte)100 : (byte)72);
+
+    // Settings window palette (slightly tuned variants of the base surfaces).
+    // SettingsWindow.ApplyThemeColors publishes these into its resource dictionary.
+    public static Color SettingsCardBg => IsDark ? C(43, 43, 43) : C(255, 255, 255);
+    public static Color SettingsInputBg => IsDark ? C(36, 36, 36) : C(249, 249, 249);
+    public static Color SettingsTabActive => IsDark ? CA(255, 255, 255, 26) : CA(0, 0, 0, 18);
+    public static Color SettingsTabHover => IsDark ? CA(255, 255, 255, 16) : CA(0, 0, 0, 12);
+    public static Color SettingsInputBorder => IsDark ? CA(255, 255, 255, 28) : CA(0, 0, 0, 22);
+    public static Color SettingsWindowBorder => IsDark ? CA(255, 255, 255, 30) : CA(0, 0, 0, 22);
+    public static Color SettingsSeparator => IsDark ? CA(255, 255, 255, 20) : CA(0, 0, 0, 18);
+
+    public static SolidColorBrush Brush(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
+    public static void ApplyTo(System.Windows.ResourceDictionary resources)
+    {
+        resources["ChromeButtonBackground"] = Brush(BgSecondary);
+        resources["ChromeButtonForeground"] = Brush(TextPrimary);
+        resources["ChromeButtonBorderBrush"] = Brush(BorderSubtle);
+        resources["ChromeButtonHoverBrush"] = Brush(BgHover);
+        resources["ChromeButtonPressedBrush"] = Brush(SelectionBg);
+        resources["ChromeDangerButtonBackground"] = Brush(IsDark ? CA(196, 43, 28, 42) : CA(196, 43, 28, 24));
+        resources["ChromeDangerButtonBorderBrush"] = Brush(IsDark ? CA(196, 43, 28, 92) : CA(196, 43, 28, 72));
+        resources["ThemeTextPrimaryBrush"] = Brush(TextPrimary);
+        resources["ThemeTextSecondaryBrush"] = Brush(TextSecondary);
+        resources["ThemeMutedBrush"] = Brush(TextMuted);
+        resources["ThemeCardBrush"] = Brush(BgCard);
+        resources["ThemeInputBackgroundBrush"] = Brush(BgSecondary);
+        resources["ThemeInputBorderBrush"] = Brush(BorderSubtle);
+        resources["ThemeTabHoverBrush"] = Brush(TabHoverBg);
+        resources["ThemeTabActiveBrush"] = Brush(TabActiveBg);
+        resources["ThemeWindowBorderBrush"] = Brush(WindowBorder);
+        resources["ThemeSeparatorBrush"] = Brush(Separator);
+        resources["ThemeAccentBrush"] = Brush(Accent);
+    }
+
+    public static void Refresh()
+    {
+        IsDark = DetectDarkMode();
+    }
+
+    /// <summary>Raised on the UI thread after the OS light/dark preference flips and app-level resources have been re-applied.</summary>
+    public static event Action? Changed;
+
+    /// <summary>Re-detect the OS theme, push the palette app-wide, refresh DWM chrome on open windows, and notify subscribers.</summary>
+    public static void OnSystemThemeChanged()
+    {
+        bool wasDark = IsDark;
+        Refresh();
+
+        var app = System.Windows.Application.Current;
+        if (app is null)
+            return;
+
+        ApplyTo(app.Resources);
+        foreach (System.Windows.Window window in app.Windows)
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+            if (hwnd != IntPtr.Zero)
+                Native.Dwm.TrySetImmersiveDarkMode(hwnd, IsDark);
+        }
+
+        if (wasDark != IsDark)
+            Changed?.Invoke();
+    }
+
+    private static bool DetectDarkMode()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            var val = key?.GetValue("AppsUseLightTheme");
+            return val is int i && i == 0;
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning("Failed to read the Windows app theme; using dark mode. {0}", ex);
+            return true;
+        }
+    }
+
+    private static Color C(byte r, byte g, byte b) => Color.FromRgb(r, g, b);
+    private static Color CA(byte r, byte g, byte b, byte a) => Color.FromArgb(a, r, g, b);
+}

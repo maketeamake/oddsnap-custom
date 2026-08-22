@@ -1,0 +1,516 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using System.Linq;
+using OddSnap.Helpers;
+using OddSnap.Models;
+using OddSnap.Services;
+
+namespace OddSnap.Capture;
+
+public sealed partial class RegionOverlayForm
+{
+    private static void ApplyUiGraphics(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.CompositingMode = CompositingMode.SourceOver;
+        g.CompositingQuality = CompositingQuality.HighQuality;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var paintStarted = PerformanceTrace.Timestamp();
+        var g = e.Graphics;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.None;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        g.SmoothingMode = SmoothingMode.None;
+
+        // Blit the screenshot plus committed annotations. Large multi-monitor
+        // captures skip the duplicate full-size cache and repaint annotations
+        // directly into the clipped paint region.
+        var clip = e.ClipRectangle;
+        g.CompositingMode = CompositingMode.SourceCopy;
+        if (ShouldCacheCommittedAnnotationsBitmap())
+        {
+            var committed = GetCommittedAnnotationsBitmap();
+            g.DrawImage(committed, clip, clip, GraphicsUnit.Pixel);
+        }
+        else
+        {
+            DisposeCommittedAnnotationsBitmap();
+            g.DrawImage(_screenshot, clip, clip, GraphicsUnit.Pixel);
+            if (_undoStack.Count > 0 || _renderSkipIndex >= 0)
+            {
+                g.CompositingMode = CompositingMode.SourceOver;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                RenderAnnotationsTo(g);
+            }
+        }
+        g.CompositingMode = CompositingMode.SourceOver;
+
+        bool isOcr = _mode == CaptureMode.Ocr;
+        bool isScan = _mode == CaptureMode.Scan;
+        bool isSelectionMode = _mode is CaptureMode.Rectangle or CaptureMode.Center or CaptureMode.Ocr or CaptureMode.Scan or CaptureMode.Sticker or CaptureMode.Upscale;
+
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        // Live tool previews (active drawing in progress)
+        PaintAnnotations(g);
+
+        if (_editorMode && ClientSize.Width > 1 && ClientSize.Height > 1)
+        {
+            using var editorBoundaryPen = new Pen(Color.FromArgb(230, 96, 165, 250), 2f)
+            {
+                Alignment = PenAlignment.Inset
+            };
+            g.DrawRectangle(editorBoundaryPen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        }
+
+        // Select tool: draw selection highlight and handles
+        if (_mode == CaptureMode.Select && _selectedAnnotationIndex >= 0 && _selectedAnnotationIndex < _undoStack.Count)
+        {
+            var selected = _selectPreviewAnnotation ?? _undoStack[_selectedAnnotationIndex];
+            var bounds = GetAnnotationBounds(selected);
+            if (bounds.Width > 0 && bounds.Height > 0)
+            {
+                var selRect = Rectangle.Inflate(bounds, 4, 4);
+                SelectionFrameRenderer.DrawRectangle(g, selRect, fill: false);
+
+                var corners = new[] {
+                    new PointF(selRect.X, selRect.Y),
+                    new PointF(selRect.Right - 1, selRect.Y),
+                    new PointF(selRect.X, selRect.Bottom - 1),
+                    new PointF(selRect.Right - 1, selRect.Bottom - 1),
+                };
+                foreach (var c in corners)
+                    WindowsHandleRenderer.Paint(g, WindowsHandleRenderer.CenteredAt(c));
+            }
+        }
+
+        if (_mode == CaptureMode.ColorPicker)
+            return; // magnifier is its own layered window, overlay stays static
+
+        if (isSelectionMode && !_isSelecting && !_hasSelection && _autoDetectActive && _autoDetectRect.Width > 0)
+        {
+            // Clamp the rect so dashes stay within the visible client area
+            var drawRect = ClampRectToClient(_autoDetectRect);
+            if (drawRect.Width > 0 && drawRect.Height > 0)
+            {
+                SelectionFrameRenderer.DrawRectangle(g, drawRect);
+            }
+            _lastAutoDetectRect = _autoDetectRect;
+        }
+        else if (isSelectionMode && !_hasSelection && !_isSelecting)
+        {
+            _lastAutoDetectRect = Rectangle.Empty;
+        }
+
+        // Selection borders (on top of everything)
+        switch (_mode)
+        {
+            case CaptureMode.Rectangle when _isSelecting && _hasSelection:
+            case CaptureMode.Center when _isSelecting && _hasSelection:
+            case CaptureMode.Ocr when _isSelecting && _hasSelection:
+            case CaptureMode.Scan when _isSelecting && _hasSelection:
+            case CaptureMode.Sticker when _isSelecting && _hasSelection:
+            case CaptureMode.Upscale when _isSelecting && _hasSelection:
+            case CaptureMode.Rectangle when _hasSelection && !_isSelecting:
+            case CaptureMode.Center when _hasSelection && !_isSelecting:
+            case CaptureMode.Ocr when _hasSelection && !_isSelecting:
+            case CaptureMode.Scan when _hasSelection && !_isSelecting:
+            case CaptureMode.Sticker when _hasSelection && !_isSelecting:
+            case CaptureMode.Upscale when _hasSelection && !_isSelecting:
+                SelectionFrameRenderer.DrawRectangle(g, _selectionRect);
+                var rectangleCursor = GetReadoutCursorPoint();
+                SelectionSizeReadout.Draw(
+                    g,
+                    rectangleCursor,
+                    _selectionRect,
+                    _readoutFont,
+                    ClientRectangle,
+                    GetSelectionReadoutDetails(rectangleCursor));
+                _lastSelectionRect = _selectionRect;
+                break;
+
+            case CaptureMode.Freeform when _freeformPoints.Count >= 2:
+                DrawFreeformSelectionPreview(g, _freeformPoints);
+                if (ShouldFillFreeformPreview(_freeformPoints))
+                {
+                    var freeformCursor = GetReadoutCursorPoint();
+                    SelectionSizeReadout.Draw(
+                        g,
+                        freeformCursor,
+                        GetFreeformBounds(_freeformPoints),
+                        _readoutFont,
+                        ClientRectangle,
+                        GetSelectionReadoutDetails(freeformCursor));
+                }
+                break;
+        }
+
+        DrawCrosshairGuides(g);
+        DrawCaptureMagnifier(g);
+
+        if (!_hasSelection)
+            _lastSelectionRect = Rectangle.Empty;
+
+        g.SmoothingMode = SmoothingMode.Default;
+
+        if (!_firstPaintLogged)
+        {
+            _firstPaintLogged = true;
+            PerformanceTrace.LogElapsed(
+                "perf.capture.overlay-first-paint",
+                paintStarted,
+                $"{ClientSize.Width}x{ClientSize.Height} clip={e.ClipRectangle.Width}x{e.ClipRectangle.Height}");
+        }
+        else if (_isSelecting)
+        {
+            var elapsed = PerformanceTrace.ElapsedSince(paintStarted);
+            var now = PerformanceTrace.Timestamp();
+            if (elapsed >= TimeSpan.FromMilliseconds(16)
+                && (_lastDragPaintLogTicks == 0 || PerformanceTrace.ElapsedSince(_lastDragPaintLogTicks) >= TimeSpan.FromMilliseconds(500)))
+            {
+                _lastDragPaintLogTicks = now;
+                AppDiagnostics.LogInfo(
+                    "perf.capture.drag-repaint",
+                    $"{elapsed.TotalMilliseconds:F1} ms · selection={_selectionRect.Width}x{_selectionRect.Height} clip={e.ClipRectangle.Width}x{e.ClipRectangle.Height}");
+            }
+        }
+    }
+
+    /// <summary>Clamp a rectangle so it stays 2px inside the client area (prevents dashes from being cut off at screen edges).</summary>
+    private Rectangle ClampRectToClient(Rectangle rect)
+    {
+        const int pad = 2;
+        int x = Math.Max(pad, rect.X);
+        int y = Math.Max(pad, rect.Y);
+        int right = Math.Min(ClientSize.Width - pad - 1, rect.Right);
+        int bottom = Math.Min(ClientSize.Height - pad - 1, rect.Bottom);
+        return new Rectangle(x, y, Math.Max(0, right - x), Math.Max(0, bottom - y));
+    }
+
+    private static void DrawFreeformSelectionPreview(Graphics g, List<Point> pts)
+    {
+        if (pts.Count < 2)
+            return;
+
+        bool fillPreview = ShouldFillFreeformPreview(pts);
+        SelectionFrameRenderer.DrawPath(g, pts, closed: fillPreview, fill: fillPreview);
+    }
+
+    private Rectangle GetFreeformRepaintBounds(IReadOnlyList<Point> points)
+    {
+        if (points.Count < 2)
+            return Rectangle.Empty;
+
+        var bounds = GetFreeformBounds(points);
+        var dirty = InflateForRepaint(bounds, 26);
+
+        if (ShouldFillFreeformPreview(points))
+        {
+            var cursor = points[^1];
+            var readoutBounds = SelectionSizeReadout.GetBounds(
+                cursor,
+                bounds,
+                _readoutFont,
+                ClientRectangle,
+                GetSelectionReadoutDetails(cursor));
+            if (!readoutBounds.IsEmpty)
+                dirty = Rectangle.Union(dirty, InflateForRepaint(readoutBounds, 10));
+        }
+
+        return dirty;
+    }
+
+    private void InvalidateSelectionChrome(Rectangle oldSelection, Point oldCursor, Rectangle newSelection, Point newCursor)
+    {
+        InvalidateSelectionChromePart(oldSelection, oldCursor);
+        InvalidateSelectionChromePart(newSelection, newCursor);
+    }
+
+    private void InvalidateSelectionChromePart(Rectangle selection, Point cursor)
+    {
+        if (selection.Width <= 2 || selection.Height <= 2)
+            return;
+
+        var selectionDirty = selection;
+        selectionDirty.Inflate(16, 16);
+        Invalidate(selectionDirty);
+
+        var readoutBounds = SelectionSizeReadout.GetBounds(
+            cursor,
+            selection,
+            _readoutFont,
+            ClientRectangle,
+            GetSelectionReadoutDetails(cursor));
+        if (!readoutBounds.IsEmpty)
+            Invalidate(InflateForRepaint(readoutBounds, 10));
+    }
+
+    private static bool ShouldFillFreeformPreview(IReadOnlyList<Point> points)
+    {
+        if (points.Count < 4)
+            return false;
+
+        var bounds = GetFreeformBounds(points);
+        return bounds.Width >= 14 && bounds.Height >= 14;
+    }
+
+    private static Rectangle GetFreeformBounds(IReadOnlyList<Point> points)
+    {
+        if (points.Count == 0)
+            return Rectangle.Empty;
+
+        int left = points[0].X;
+        int top = points[0].Y;
+        int right = points[0].X;
+        int bottom = points[0].Y;
+        for (int i = 1; i < points.Count; i++)
+        {
+            left = Math.Min(left, points[i].X);
+            top = Math.Min(top, points[i].Y);
+            right = Math.Max(right, points[i].X);
+            bottom = Math.Max(bottom, points[i].Y);
+        }
+
+        return Rectangle.FromLTRB(left, top, right, bottom);
+    }
+
+    private void DrawCrosshairGuides(Graphics g)
+    {
+        if (!_crosshairVisible || _crosshairPoint == Point.Empty)
+            return;
+
+        var point = _crosshairPoint;
+        int gap = 5;
+        var shadow = SketchRenderer.GetToolColorBrush(Color.FromArgb(30, 0, 0, 0));
+        var line = SketchRenderer.GetToolColorBrush(Color.FromArgb(
+            72,
+            UiChrome.SurfaceTextPrimary.R,
+            UiChrome.SurfaceTextPrimary.G,
+            UiChrome.SurfaceTextPrimary.B));
+
+        if (point.X - gap > 0)
+        {
+            g.FillRectangle(shadow, 0, point.Y - 1, point.X - gap, 3);
+            g.FillRectangle(line, 0, point.Y, point.X - gap, 1);
+        }
+
+        if (point.X + gap < ClientSize.Width)
+        {
+            int x = point.X + gap;
+            g.FillRectangle(shadow, x, point.Y - 1, ClientSize.Width - x, 3);
+            g.FillRectangle(line, x, point.Y, ClientSize.Width - x, 1);
+        }
+
+        if (point.Y - gap > 0)
+        {
+            g.FillRectangle(shadow, point.X - 1, 0, 3, point.Y - gap);
+            g.FillRectangle(line, point.X, 0, 1, point.Y - gap);
+        }
+
+        if (point.Y + gap < ClientSize.Height)
+        {
+            int y = point.Y + gap;
+            g.FillRectangle(shadow, point.X - 1, y, 3, ClientSize.Height - y);
+            g.FillRectangle(line, point.X, y, 1, ClientSize.Height - y);
+        }
+    }
+
+    private void DrawCaptureMagnifier(Graphics g)
+    {
+        if (!_captureMagnifierVisible || _captureMagnifierBounds.IsEmpty)
+            return;
+
+        var bounds = _captureMagnifierBounds;
+        var lensRect = new Rectangle(
+            bounds.X + PickerMagnifierForm.Pad,
+            bounds.Y + PickerMagnifierForm.Pad,
+            PickerMagnifierForm.LensSize,
+            PickerMagnifierForm.LensSize);
+
+        PaintShadow(g, lensRect, 14f, alpha: 42, yOffset: 1f);
+        using var lensPath = RRect(lensRect, 14f);
+        using var background = new SolidBrush(UiChrome.SurfaceElevated);
+        using var outer = new Pen(UiChrome.SurfaceBorderSubtle, 1f);
+        using var inner = new Pen(UiChrome.SurfaceBorderStrong, 1.5f);
+        g.FillPath(background, lensPath);
+
+        var state = g.Save();
+        g.SetClip(lensPath);
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(_magBitmap, lensRect);
+        g.Restore(state);
+
+        g.DrawPath(outer, lensPath);
+        var innerRect = lensRect;
+        innerRect.Inflate(-1, -1);
+        using (var innerPath = RRect(innerRect, 13f))
+            g.DrawPath(inner, innerPath);
+
+        int cx = lensRect.X + lensRect.Width / 2;
+        int cy = lensRect.Y + lensRect.Height / 2;
+        using var dotFill = new SolidBrush(UiChrome.SurfaceTextPrimary);
+        using var dotBorder = new Pen(UiChrome.SurfaceBorderStrong, 1f);
+        g.FillRectangle(dotFill, cx - 2, cy - 2, 4, 4);
+        g.DrawRectangle(dotBorder, cx - 2, cy - 2, 4, 4);
+    }
+
+    private static void PaintShadow(Graphics g, RectangleF rect, float radius, int alpha = 52, float yOffset = 1f)
+    {
+        var oldSmooth = g.SmoothingMode;
+        var oldComp = g.CompositingMode;
+        var oldCompQual = g.CompositingQuality;
+        var oldPix = g.PixelOffsetMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.CompositingMode = CompositingMode.SourceOver;
+        g.CompositingQuality = CompositingQuality.HighQuality;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+        // Fluent 2-layer shadow: ambient (soft, wide) + directional (tighter, more Y-offset)
+        var ambient = rect;
+        ambient.Inflate(8f, 8f);
+        ambient.Offset(0, yOffset + 1f);
+        int ambientAlpha = Math.Clamp((int)(alpha * 0.10f), 1, 255);
+        using (var path = RRect(ambient, radius + 8f))
+            g.FillPath(SketchRenderer.GetToolColorBrush(Color.FromArgb(ambientAlpha, 0, 0, 0)), path);
+
+        var directional = rect;
+        directional.Inflate(3f, 3f);
+        directional.Offset(0, yOffset + 4f);
+        int dirAlpha = Math.Clamp((int)(alpha * 0.22f), 1, 255);
+        using (var path = RRect(directional, radius + 3f))
+            g.FillPath(SketchRenderer.GetToolColorBrush(Color.FromArgb(dirAlpha, 0, 0, 0)), path);
+
+        g.SmoothingMode = oldSmooth;
+        g.CompositingMode = oldComp;
+        g.CompositingQuality = oldCompQual;
+        g.PixelOffsetMode = oldPix;
+    }
+
+    private static readonly Pen RulerShadowPen = new(Color.FromArgb(70, 0, 0, 0), 3f)
+    { StartCap = LineCap.Flat, EndCap = LineCap.Flat };
+    private static Pen? _rulerLinePen;
+    private static Pen? _rulerTickPen;
+    private static SolidBrush? _rulerBgBrush;
+    private static Pen? _rulerBorderPen;
+    private static SolidBrush? _rulerFgBrush;
+    private static Font? _rulerFont;
+    private static int _rulerThemeKey;
+
+    private static void EnsureRulerChrome()
+    {
+        var text = UiChrome.SurfaceTextPrimary;
+        var pill = UiChrome.SurfacePill;
+        var border = UiChrome.SurfaceBorderSubtle;
+        int key = HashCode.Combine(text.ToArgb(), pill.ToArgb(), border.ToArgb());
+        if (_rulerLinePen != null && _rulerThemeKey == key) return;
+
+        _rulerLinePen?.Dispose();
+        _rulerTickPen?.Dispose();
+        _rulerBgBrush?.Dispose();
+        _rulerBorderPen?.Dispose();
+        _rulerFgBrush?.Dispose();
+
+        _rulerLinePen = new Pen(text, 1.8f) { StartCap = LineCap.Flat, EndCap = LineCap.Flat };
+        _rulerTickPen = new Pen(text, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        _rulerBgBrush = new SolidBrush(pill);
+        _rulerBorderPen = new Pen(border, 1.4f);
+        _rulerFgBrush = new SolidBrush(text);
+        _rulerFont ??= UiChrome.ChromeFont(9.5f);
+        _rulerThemeKey = key;
+    }
+
+    private void PaintRuler(Graphics g, Point from, Point to)
+    {
+        float dx = to.X - from.X;
+        float dy = to.Y - from.Y;
+        float dist = MathF.Sqrt(dx * dx + dy * dy);
+        float angle = MathF.Atan2(dy, dx) * 180f / MathF.PI;
+
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+        float nx = 0, ny = 0;
+        if (dist > 1) { nx = -dy / dist; ny = dx / dist; }
+        const float tickHalf = 6f;
+
+        EnsureRulerChrome();
+
+        g.DrawLine(RulerShadowPen, from.X + 1, from.Y + 1, to.X + 1, to.Y + 1);
+        g.DrawLine(_rulerLinePen!, from, to);
+        g.DrawLine(_rulerTickPen!, from.X - nx * tickHalf, from.Y - ny * tickHalf,
+                            from.X + nx * tickHalf, from.Y + ny * tickHalf);
+        g.DrawLine(_rulerTickPen!, to.X - nx * tickHalf, to.Y - ny * tickHalf,
+                            to.X + nx * tickHalf, to.Y + ny * tickHalf);
+
+        string text = $"{(int)dist}px  \u00b7  {Math.Abs(dx):0} \u00d7 {Math.Abs(dy):0}  \u00b7  {angle:0.0}\u00b0";
+        var sz = g.MeasureString(text, _rulerFont!);
+        var mid = new PointF((from.X + to.X) / 2f, (from.Y + to.Y) / 2f);
+        var label = new RectangleF(mid.X - sz.Width / 2f - 10, mid.Y - sz.Height - 14, sz.Width + 20, sz.Height + 10);
+        PaintShadow(g, label, 8f, 48, 1f);
+        using var path = RRect(label, 8f);
+        g.FillPath(_rulerBgBrush!, path);
+        g.DrawPath(_rulerBorderPen!, path);
+        g.DrawString(text, _rulerFont!, _rulerFgBrush!, label.X + 10, label.Y + 5);
+
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SystemDefault;
+        g.SmoothingMode = SmoothingMode.Default;
+    }
+
+    private Graphics GetBlurPreviewGraphics(Size size)
+    {
+        if (size.Width <= 0 || size.Height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(size));
+
+        if (_blurPreviewBitmap == null || _blurPreviewSize != size)
+        {
+            _blurPreviewGraphics?.Dispose();
+            _blurPreviewBitmap?.Dispose();
+            _blurPreviewBitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
+            _blurPreviewGraphics = Graphics.FromImage(_blurPreviewBitmap);
+            _blurPreviewSize = size;
+        }
+
+        return _blurPreviewGraphics!;
+    }
+
+    private void PaintBlurRect(Graphics g, Rectangle rect)
+    {
+        if (rect.Width < 3 || rect.Height < 3) return;
+        var clamped = Rectangle.Intersect(rect, new Rectangle(0, 0, _bmpW, _bmpH));
+        if (clamped.Width < 1 || clamped.Height < 1) return;
+        int blockSize = Math.Clamp(Math.Min(clamped.Width, clamped.Height) / 12, 6, 18);
+        int sw = Math.Max(1, clamped.Width / blockSize);
+        int sh = Math.Max(1, clamped.Height / blockSize);
+        var small = GetBlurPreviewGraphics(new Size(sw, sh));
+        small.Clear(Color.Transparent);
+        small.InterpolationMode = InterpolationMode.NearestNeighbor;
+        small.PixelOffsetMode = PixelOffsetMode.Half;
+        small.DrawImage(_screenshot, new Rectangle(0, 0, sw, sh), clamped, GraphicsUnit.Pixel);
+
+        var state = g.Save();
+        try
+        {
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(_blurPreviewBitmap!, clamped);
+        }
+        finally
+        {
+            g.Restore(state);
+        }
+    }
+
+}

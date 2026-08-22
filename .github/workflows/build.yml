@@ -1,0 +1,37 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore OddSnap.sln
+
+      - name: Audit NuGet dependencies
+        run: dotnet list OddSnap.sln package --vulnerable --include-transitive
+
+      - name: Build
+        run: dotnet build OddSnap.sln -c Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test src/OddSnap.Tests/OddSnap.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+
