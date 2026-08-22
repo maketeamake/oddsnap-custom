@@ -4,9 +4,9 @@
     "net9.0-windows10.0.19041": {
       "Microsoft.Web.WebView2": {
         "type": "Direct",
-        "requested": "[1.0.3912.50, )",
-        "resolved": "1.0.3912.50",
-        "contentHash": "mEIKZDSmb6CxGWKoxaxTSJ0yi0DD2zp29TA7kJY2GdanuH3c5aYruwfqsm3OsYn/h2hUhybQZvfbxyZe4O+X4Q=="
+        "requested": "[1.0.4129.50, )",
+        "resolved": "1.0.4129.50",
+        "contentHash": "BuJC70c7SCl8wlvojLZbc/E5ONmGyG3fhAMmpftCpKerxae//TxgKOTELRK2QRD7m7jigNFQRf6cfVT3ZiIQoQ=="
       },
       "Microsoft.Windows.SDK.BuildTools": {
         "type": "Direct",
@@ -128,9 +128,9 @@
     "net9.0-windows10.0.19041/win-arm64": {
       "Microsoft.Web.WebView2": {
         "type": "Direct",
-        "requested": "[1.0.3912.50, )",
-        "resolved": "1.0.3912.50",
-        "contentHash": "mEIKZDSmb6CxGWKoxaxTSJ0yi0DD2zp29TA7kJY2GdanuH3c5aYruwfqsm3OsYn/h2hUhybQZvfbxyZe4O+X4Q=="
+        "requested": "[1.0.4129.50, )",
+        "resolved": "1.0.4129.50",
+        "contentHash": "BuJC70c7SCl8wlvojLZbc/E5ONmGyG3fhAMmpftCpKerxae//TxgKOTELRK2QRD7m7jigNFQRf6cfVT3ZiIQoQ=="
       },
       "Microsoft.WindowsAppSDK.Foundation": {
         "type": "Transitive",
@@ -145,9 +145,9 @@
     "net9.0-windows10.0.19041/win-x64": {
       "Microsoft.Web.WebView2": {
         "type": "Direct",
-        "requested": "[1.0.3912.50, )",
-        "resolved": "1.0.3912.50",
-        "contentHash": "mEIKZDSmb6CxGWKoxaxTSJ0yi0DD2zp29TA7kJY2GdanuH3c5aYruwfqsm3OsYn/h2hUhybQZvfbxyZe4O+X4Q=="
+        "requested": "[1.0.4129.50, )",
+        "resolved": "1.0.4129.50",
+        "contentHash": "BuJC70c7SCl8wlvojLZbc/E5ONmGyG3fhAMmpftCpKerxae//TxgKOTELRK2QRD7m7jigNFQRf6cfVT3ZiIQoQ=="
       },
       "Microsoft.WindowsAppSDK.Foundation": {
         "type": "Transitive",
@@ -162,9 +162,9 @@
     "net9.0-windows10.0.19041/win-x86": {
       "Microsoft.Web.WebView2": {
         "type": "Direct",
-        "requested": "[1.0.3912.50, )",
-        "resolved": "1.0.3912.50",
-        "contentHash": "mEIKZDSmb6CxGWKoxaxTSJ0yi0DD2zp29TA7kJY2GdanuH3c5aYruwfqsm3OsYn/h2hUhybQZvfbxyZe4O+X4Q=="
+        "requested": "[1.0.4129.50, )",
+        "resolved": "1.0.4129.50",
+        "contentHash": "BuJC70c7SCl8wlvojLZbc/E5ONmGyG3fhAMmpftCpKerxae//TxgKOTELRK2QRD7m7jigNFQRf6cfVT3ZiIQoQ=="
       },
       "Microsoft.WindowsAppSDK.Foundation": {
         "type": "Transitive",
