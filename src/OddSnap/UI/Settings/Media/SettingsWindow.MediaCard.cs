@@ -8,10 +8,12 @@ using OddSnap.Helpers;
 using OddSnap.Models;
 using OddSnap.Services;
 using Brushes = System.Windows.Media.Brushes;
+using ContextMenu = System.Windows.Controls.ContextMenu;
 using Cursors = System.Windows.Input.Cursors;
 using FontFamily = System.Windows.Media.FontFamily;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Image = System.Windows.Controls.Image;
+using MenuItem = System.Windows.Controls.MenuItem;
 using VerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace OddSnap.UI;

@@ -33,7 +33,7 @@ utility functionality inherited from OddSnap.
 Requirements:
 
 - Windows 10 or Windows 11
-- The [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- The [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
   selected by `global.json`
 
 ```powershell
@@ -41,7 +41,7 @@ dotnet restore OddSnap.sln --locked-mode
 dotnet format whitespace OddSnap.sln --verify-no-changes --no-restore
 dotnet format style OddSnap.sln --verify-no-changes --severity warn --no-restore
 dotnet format analyzers OddSnap.sln --verify-no-changes --severity warn --no-restore
-dotnet build OddSnap.sln -c Release --no-restore
+dotnet build OddSnap.sln -c Release --no-restore -warnaserror
 dotnet test src/OddSnap.Tests/OddSnap.Tests.csproj -c Release --no-build
 ```
 

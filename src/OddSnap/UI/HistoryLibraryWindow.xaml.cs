@@ -472,6 +472,22 @@ public partial class HistoryLibraryWindow : Window
     private void CopySelected_Click(object sender, RoutedEventArgs e)
         => CopyCurrentLibraryImage();
 
+    private void CopyFullPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (FilmstripList.SelectedItem is not LibraryImageItem item)
+            return;
+
+        try
+        {
+            ClipboardService.CopyTextToClipboard(Path.GetFullPath(item.Entry.FilePath));
+            ToastWindow.Show("Path copied", "Full file path copied to clipboard");
+        }
+        catch (Exception ex)
+        {
+            ToastWindow.ShowError("Copy path failed", ex.Message);
+        }
+    }
+
     private bool CopyCurrentLibraryImage()
     {
         if (FilmstripList.SelectedItem is not LibraryImageItem item)

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Windows;
 using System.Windows.Threading;
 using OddSnap.Services;
@@ -6,6 +7,7 @@ using Velopack;
 
 namespace OddSnap;
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "WPF owns the Application lifetime; OnExit shuts down and disposes all owned services.")]
 public partial class App : Application
 {
     [STAThread]

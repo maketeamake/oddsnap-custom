@@ -34,15 +34,5 @@ dotnet_diagnostic.CA2263.severity = suggestion
 # Underscores make xUnit scenario names readable in test output.
 dotnet_diagnostic.CA1707.severity = none
 
-[src/OddSnap/App.xaml.cs]
-# WPF Application owns these resources for its lifetime and releases them from
-# OnExit/App.Shutdown.cs; IDisposable is not part of the WPF Application model.
-dotnet_diagnostic.CA1001.severity = none
-
-[src/OddSnap/UI/{HistoryLibraryWindow.Editor.cs,OcrResultWindow.xaml.cs,SettingsWindow.xaml.cs,UpscaleResultWindow.xaml.cs}]
-# These WPF windows release owned resources from Closed/OnClosed. Implementing
-# IDisposable would add a second lifecycle that callers would not invoke.
-dotnet_diagnostic.CA1001.severity = none
-
 [*.{md,yml,yaml,json}]
 end_of_line = lf

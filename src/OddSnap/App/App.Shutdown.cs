@@ -9,6 +9,20 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         Interlocked.Exchange(ref _isShuttingDown, 1);
+        try
+        {
+            if (_historyLibraryWindow is { } library &&
+                !library.FlushPendingInlineSaveOnExit(TimeSpan.FromSeconds(15)))
+            {
+                AppDiagnostics.LogWarning(
+                    "shutdown.flush-history-library",
+                    "The latest Library edit did not finish saving before the shutdown timeout.");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("shutdown.flush-history-library", ex);
+        }
         try { _historyLibraryWindow?.Close(); } catch (Exception ex) { AppDiagnostics.LogError("shutdown.close-history-library", ex); }
         _historyLibraryWindow = null;
         try { _settingsWindow?.Close(); } catch (Exception ex) { AppDiagnostics.LogError("shutdown.close-settings-window", ex); }

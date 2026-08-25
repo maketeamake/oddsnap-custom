@@ -10,7 +10,7 @@ capture engines.
 ```
 OddSnap.sln
 ├── src/OddSnap          WPF + WinForms production app (ships to users)
-├── src/OddSnap.AppModel UI-agnostic contracts (net9.0, zero dependencies)
+├── src/OddSnap.AppModel UI-agnostic contracts (net10.0, zero dependencies)
 ├── src/OddSnap.WinUI    WinUI 3 shell prototype (schema-driven, not shipped)
 └── src/OddSnap.Tests    xUnit suite for pure, non-UI logic
 ```
@@ -76,8 +76,9 @@ Hard rules for new/modified UI:
 - `src/OddSnap.Tests` covers pure logic (settings normalization, filename
   templates, localization fallback, history utilities, hotkey formatting,
   upload validation). CI runs formatting, the recommended .NET analyzer
-  profile, dependency auditing, a warnings-as-errors Release build, and the
-  test suite on every push/PR (`build.yml`, `build-and-test` job).
+  profile, dependency auditing, a warnings-as-errors Release build, a
+  self-contained `win-x64` publish smoke test, and the test suite on every
+  push/PR (`build.yml`, `build-and-test` job).
 - Tests must never: open windows, register global hotkeys, capture the
   screen, touch the network, or write outside the temp directory. The user's
   real settings/history under AppData are off-limits.

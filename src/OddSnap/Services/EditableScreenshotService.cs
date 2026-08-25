@@ -242,6 +242,25 @@ public static class EditableScreenshotService
         _ => a
     };
 
+    internal static Bitmap ExtractRegion(Bitmap source, Rectangle requestedRegion)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var sourceBounds = new Rectangle(0, 0, source.Width, source.Height);
+        var region = Rectangle.Intersect(sourceBounds, requestedRegion);
+        if (region.Width <= 0 || region.Height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requestedRegion), "The selected region is outside the image.");
+
+        var result = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(result);
+        graphics.CompositingMode = CompositingMode.SourceCopy;
+        graphics.DrawImage(
+            source,
+            new Rectangle(0, 0, region.Width, region.Height),
+            region,
+            GraphicsUnit.Pixel);
+        return result;
+    }
+
     private static Bitmap Resize(Bitmap source, int width, int height)
     {
         var result = new Bitmap(width, height, PixelFormat.Format32bppArgb);

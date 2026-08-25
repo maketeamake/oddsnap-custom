@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Windows;
 using System.Windows.Media;
@@ -13,6 +14,7 @@ using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
 namespace OddSnap.UI;
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "The WPF window owns bitmaps and cancellation state and disposes them from its Closed lifecycle handler.")]
 public partial class UpscaleResultWindow : Window
 {
     private readonly SettingsService _settingsService;

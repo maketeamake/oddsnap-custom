@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,6 +13,7 @@ using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
 namespace OddSnap.UI;
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "The WPF window owns the cancellation source and disposes it from its Closed lifecycle handler.")]
 public partial class OcrResultWindow : Window
 {
     private readonly SettingsService _settingsService;

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -11,6 +12,7 @@ using CaptureMode = OddSnap.Models.CaptureMode;
 
 namespace OddSnap.UI;
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "The WPF window owns these resources and disposes them from its Closed lifecycle handler.")]
 public partial class SettingsWindow : Window
 {
     private const string OpenSourceLocalTranslationJobKey = "runtime:translation-open-source-local";

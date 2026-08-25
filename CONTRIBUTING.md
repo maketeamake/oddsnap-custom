@@ -26,6 +26,7 @@ dotnet format style OddSnap.sln --verify-no-changes --severity warn --no-restore
 dotnet format analyzers OddSnap.sln --verify-no-changes --severity warn --no-restore
 dotnet list OddSnap.sln package --vulnerable --include-transitive
 dotnet build OddSnap.sln -c Release --no-restore -warnaserror
+dotnet publish src/OddSnap/OddSnap.csproj -c Release -r win-x64 --self-contained true --no-restore -warnaserror
 dotnet test src/OddSnap.Tests/OddSnap.Tests.csproj -c Release --no-build
 ```
 

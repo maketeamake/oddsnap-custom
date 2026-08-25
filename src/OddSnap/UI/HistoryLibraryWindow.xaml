@@ -216,6 +216,8 @@
                             <ContextMenu>
                                 <MenuItem Header="Crop to selection" Tag="crop" Click="CropModePreset_Click"/>
                                 <MenuItem Header="Cut out horizontal/vertical band" Tag="cutout" Click="CropModePreset_Click"/>
+                                <Separator/>
+                                <MenuItem Header="Copy region (keep image unchanged)" Tag="copy" Click="CropModePreset_Click"/>
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>
@@ -349,10 +351,16 @@
                     <RowDefinition Height="132"/>
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row="0" Background="#171717"
-                        BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
-                        CornerRadius="8" ClipToBounds="True">
-                    <Grid>
+                <Grid Grid.Row="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Background="#171717"
+                            BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
+                            CornerRadius="8" ClipToBounds="True">
+                        <Grid>
                         <Grid x:Name="EditorViewport" Margin="12" ClipToBounds="True"
                               Background="Transparent"
                               SizeChanged="EditorViewport_SizeChanged"
@@ -386,30 +394,35 @@
                                    Foreground="White" Opacity="0.35" FontSize="18"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
 
-                        <Border VerticalAlignment="Bottom" Background="#D9222222" Padding="12,9">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel>
-                                    <TextBlock x:Name="PreviewSourceText" Foreground="White" FontWeight="SemiBold"
-                                               TextTrimming="CharacterEllipsis"/>
-                                    <TextBlock x:Name="PreviewDateText" Foreground="White" Opacity="0.58"
-                                               FontSize="11" Margin="0,2,0,0"/>
-                                    <TextBlock x:Name="PreviewTagsText" Foreground="#FF6AA9FF" Opacity="0.92"
-                                               FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Content="Copy" Style="{StaticResource LibraryButton}" Click="CopySelected_Click"/>
-                                    <Button Content="Edit tags" Style="{StaticResource LibraryButton}" Click="EditTags_Click"/>
-                                    <Button Content="Show in folder" Style="{StaticResource LibraryButton}" Click="ShowInFolder_Click"/>
-                                    <Button Content="Delete" Style="{StaticResource LibraryButton}" Click="DeleteSelected_Click"/>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Margin="0,6,0,0" Background="#FF222222" Padding="12,9"
+                            BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
+                            CornerRadius="8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock x:Name="PreviewSourceText" Foreground="White" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="PreviewDateText" Foreground="White" Opacity="0.58"
+                                           FontSize="11" Margin="0,2,0,0"/>
+                                <TextBlock x:Name="PreviewTagsText" Foreground="#FF6AA9FF" Opacity="0.92"
+                                           FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="Copy" Style="{StaticResource LibraryButton}" Click="CopySelected_Click"/>
+                                <Button Content="Copy full file path" Style="{StaticResource LibraryButton}" Click="CopyFullPath_Click"/>
+                                <Button Content="Edit tags" Style="{StaticResource LibraryButton}" Click="EditTags_Click"/>
+                                <Button Content="Show in folder" Style="{StaticResource LibraryButton}" Click="ShowInFolder_Click"/>
+                                <Button Content="Delete" Style="{StaticResource LibraryButton}" Click="DeleteSelected_Click"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
 
                 <Border Grid.Row="1" Margin="0,8,0,0" Background="{DynamicResource ThemeCardBrush}"
                         BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"

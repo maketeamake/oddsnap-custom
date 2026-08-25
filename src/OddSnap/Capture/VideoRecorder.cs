@@ -60,12 +60,12 @@ public sealed class VideoRecorder : IDisposable
     private Thread? _delayedAudioStartThread;
 
     // Audio capture
-    private WaveInEvent? _micCapture;
-    private WasapiLoopbackCapture? _desktopCapture;
+    private WaveIn? _micCapture;
+    private WasapiRecorder? _desktopCapture;
     private WaveFileWriter? _micWriter;
     private WaveFileWriter? _desktopWriter;
     private EventHandler<WaveInEventArgs>? _micDataAvailableHandler;
-    private EventHandler<WaveInEventArgs>? _desktopDataAvailableHandler;
+    private CaptureDataAvailableHandler? _desktopDataAvailableHandler;
     private string? _micWavPath;
     private string? _desktopWavPath;
     private int _micWriteFailureLogged;
@@ -305,29 +305,27 @@ public sealed class VideoRecorder : IDisposable
     private void StartDesktopAudioCapture(string dir, string outputPath)
     {
         string wavPath = Path.Combine(dir, Path.GetFileNameWithoutExtension(outputPath) + "_desktop.wav");
-        WasapiLoopbackCapture? capture = null;
+        WasapiRecorder? capture = null;
         WaveFileWriter? writer = null;
-        EventHandler<WaveInEventArgs>? dataAvailableHandler = null;
+        CaptureDataAvailableHandler? dataAvailableHandler = null;
         bool started = false;
 
         try
         {
-            if (string.IsNullOrEmpty(_desktopDeviceId))
-            {
-                capture = new WasapiLoopbackCapture();
-            }
-            else
+            var builder = new WasapiRecorderBuilder().WithLoopbackCapture();
+            if (!string.IsNullOrEmpty(_desktopDeviceId))
             {
                 using var enumerator = new MMDeviceEnumerator();
-                capture = new WasapiLoopbackCapture(enumerator.GetDevice(_desktopDeviceId));
+                builder.WithDevice(enumerator.GetDevice(_desktopDeviceId));
             }
+            capture = builder.Build();
 
             writer = new WaveFileWriter(wavPath, capture.WaveFormat);
-            dataAvailableHandler = (_, e) =>
+            dataAvailableHandler = (buffer, _, _, _) =>
             {
                 try
                 {
-                    writer?.Write(e.Buffer, 0, e.BytesRecorded);
+                    writer?.Write(buffer);
                 }
                 catch (Exception ex)
                 {
@@ -372,7 +370,7 @@ public sealed class VideoRecorder : IDisposable
     private void StartMicrophoneAudioCapture(string dir, string outputPath)
     {
         string wavPath = Path.Combine(dir, Path.GetFileNameWithoutExtension(outputPath) + "_mic.wav");
-        WaveInEvent? capture = null;
+        WaveIn? capture = null;
         WaveFileWriter? writer = null;
         EventHandler<WaveInEventArgs>? dataAvailableHandler = null;
         bool started = false;
@@ -380,7 +378,7 @@ public sealed class VideoRecorder : IDisposable
         try
         {
             int micDevice = ResolveMicDeviceNumber(_micDeviceId);
-            capture = new WaveInEvent
+            capture = new WaveIn
             {
                 DeviceNumber = micDevice,
                 WaveFormat = new WaveFormat(44100, 16, 1)
@@ -435,9 +433,9 @@ public sealed class VideoRecorder : IDisposable
     private static int ResolveMicDeviceNumber(string? deviceId)
     {
         if (string.IsNullOrEmpty(deviceId)) return 0;
-        for (int i = 0; i < WaveInEvent.DeviceCount; i++)
+        for (int i = 0; i < WaveIn.DeviceCount; i++)
         {
-            var caps = WaveInEvent.GetCapabilities(i);
+            var caps = WaveIn.GetCapabilities(i);
             if (caps.ProductName.Contains(deviceId, StringComparison.OrdinalIgnoreCase))
                 return i;
         }
@@ -712,6 +710,27 @@ public sealed class VideoRecorder : IDisposable
     }
 
     private static void StopCaptureAndWait(IWaveIn? capture, int timeoutMs = 5_000)
+    {
+        if (capture == null)
+            return;
+
+        using var stopped = new ManualResetEventSlim(false);
+        EventHandler<StoppedEventArgs>? handler = (_, _) => stopped.Set();
+        capture.RecordingStopped += handler;
+        try
+        {
+            try { capture.StopRecording(); }
+            catch { stopped.Set(); }
+
+            try { stopped.Wait(timeoutMs); } catch { }
+        }
+        finally
+        {
+            try { capture.RecordingStopped -= handler; } catch { }
+        }
+    }
+
+    private static void StopCaptureAndWait(WasapiRecorder? capture, int timeoutMs = 5_000)
     {
         if (capture == null)
             return;

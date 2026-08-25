@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
@@ -19,19 +20,23 @@ using DrawingRectangle = System.Drawing.Rectangle;
 using MediaBrush = System.Windows.Media.Brush;
 using MediaBrushes = System.Windows.Media.Brushes;
 using MediaColor = System.Windows.Media.Color;
+using MenuItem = System.Windows.Controls.MenuItem;
 using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using ScreenshotCaptureMode = OddSnap.Models.CaptureMode;
 using WpfButton = System.Windows.Controls.Button;
+using WpfContextMenu = System.Windows.Controls.ContextMenu;
 using WpfCursors = System.Windows.Input.Cursors;
 using WpfImage = System.Windows.Controls.Image;
 using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
 
 namespace OddSnap.UI;
 
+[SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "The WPF window owns these resources and disposes them from its Closed lifecycle handler.")]
 public partial class HistoryLibraryWindow
 {
     private static readonly DrawingColor DefaultInlineDrawingColor = DrawingColor.FromArgb(255, 255, 59, 48);
+    private const int InlineTextFrameHorizontalPadding = 5;
     private EditableScreenshotProject? _inlineProject;
     private string? _inlineProjectPath;
     private readonly List<Annotation> _inlineAnnotations = [];
@@ -78,10 +83,15 @@ public partial class HistoryLibraryWindow
     private string _inlineTextFontFamily = "Segoe UI";
     private ImageSource? _inlineTextPreviousPreview;
     private List<Annotation>? _inlineTextPreviousPreviewAnnotations;
+    private ImageSource? _inlineSelectionPreviousPreview;
+    private List<Annotation>? _inlineSelectionPreviousPreviewAnnotations;
     private string _inlineSelectedEmoji = "✅";
     private DrawingColor _inlineEraserColor = DrawingColor.White;
     private InlineSaveJob? _inlineQueuedSaveJob;
     private bool _inlineSaveLoopRunning;
+    private InlineSaveOperation? _inlineActiveSaveOperation;
+    private long _inlineNextSaveSequence;
+    private readonly Dictionary<string, long> _inlineLatestSaveSequenceByPath = new(StringComparer.OrdinalIgnoreCase);
     private bool _suppressHistoryRefresh;
 
     private enum InlineResizeHandle
@@ -97,7 +107,8 @@ public partial class HistoryLibraryWindow
     private enum InlineCropMode
     {
         KeepSelection,
-        CutOutBand
+        CutOutBand,
+        CopySelection
     }
 
     private void InitializeInlineToolbarVisuals()
@@ -223,6 +234,8 @@ public partial class HistoryLibraryWindow
         _inlineProject = null;
         _inlineAnnotations.Clear();
         _inlinePreviewAnnotations.Clear();
+        _inlineSelectionPreviousPreview = null;
+        _inlineSelectionPreviousPreviewAnnotations = null;
         ClearInlineHistoryStack(_inlineUndoStack);
         ClearInlineHistoryStack(_inlineRedoStack);
         ClearInlineSelectionState();
@@ -277,6 +290,40 @@ public partial class HistoryLibraryWindow
             : null;
     }
 
+    private void BeginInlineSelectionDragPreview()
+    {
+        if (_inlineProject is null || _inlineSelectionPreviousPreview is not null)
+            return;
+
+        _inlineSelectionPreviousPreview = PreviewImage.Source;
+        _inlineSelectionPreviousPreviewAnnotations = _inlinePreviewAnnotations.ToList();
+        PreviewImage.Source = BitmapToBitmapSource(_inlineProject.BaseImage);
+        _inlinePreviewAnnotations.Clear();
+        RefreshPendingInlineAnnotations();
+    }
+
+    private void RestoreInlineSelectionDragPreview()
+    {
+        if (_inlineSelectionPreviousPreview is null)
+            return;
+
+        PreviewImage.Source = _inlineSelectionPreviousPreview;
+        _inlinePreviewAnnotations.Clear();
+        if (_inlineSelectionPreviousPreviewAnnotations is not null)
+            _inlinePreviewAnnotations.AddRange(_inlineSelectionPreviousPreviewAnnotations);
+        _inlineSelectionPreviousPreview = null;
+        _inlineSelectionPreviousPreviewAnnotations = null;
+        RefreshPendingInlineAnnotations();
+    }
+
+    private void CommitInlineSelectionDragPreview()
+    {
+        _inlineSelectionPreviousPreview = null;
+        _inlineSelectionPreviousPreviewAnnotations = null;
+        _inlinePreviewAnnotations.Clear();
+        RefreshPendingInlineAnnotations();
+    }
+
     private void UpdateInlineToolButtons()
     {
         foreach (var (button, definition) in _inlineToolButtons)
@@ -321,12 +368,18 @@ public partial class HistoryLibraryWindow
     {
         if (sender is not MenuItem { Tag: string value })
             return;
-        _inlineCropMode = string.Equals(value, "cutout", StringComparison.OrdinalIgnoreCase)
-            ? InlineCropMode.CutOutBand
-            : InlineCropMode.KeepSelection;
-        CropToolButton.ToolTip = _inlineCropMode == InlineCropMode.CutOutBand
-            ? "Cut out a horizontal or vertical band"
-            : "Crop to selection";
+        _inlineCropMode = value.ToLowerInvariant() switch
+        {
+            "cutout" => InlineCropMode.CutOutBand,
+            "copy" => InlineCropMode.CopySelection,
+            _ => InlineCropMode.KeepSelection
+        };
+        CropToolButton.ToolTip = _inlineCropMode switch
+        {
+            InlineCropMode.CutOutBand => "Cut out a horizontal or vertical band",
+            InlineCropMode.CopySelection => "Copy a region without changing the image",
+            _ => "Crop to selection"
+        };
         SetInlineEditorTool(ScreenshotCaptureMode.Crop);
     }
 
@@ -388,7 +441,7 @@ public partial class HistoryLibraryWindow
         }
     }
 
-    private static void InitializeColorMenuVisuals(ContextMenu? menu)
+    private static void InitializeColorMenuVisuals(WpfContextMenu? menu)
     {
         if (menu is null)
             return;
@@ -796,10 +849,12 @@ public partial class HistoryLibraryWindow
         {
             _inlineResizeHandle = resizeHandle;
             _inlineSelectionOriginal = _inlineAnnotations[_inlineSelectedAnnotation];
+            SnapshotInlineSelectionForDrag();
             _inlineDragStart = imagePoint;
             _inlineDragCurrent = imagePoint;
             _inlineDragging = true;
             _inlineDraggingSelection = true;
+            BeginInlineSelectionDragPreview();
             EditorViewport.Cursor = GetInlineResizeCursor(resizeHandle);
             EditorViewport.CaptureMouse();
             e.Handled = true;
@@ -849,6 +904,7 @@ public partial class HistoryLibraryWindow
             _inlineDragCurrent = imagePoint;
             _inlineDragging = true;
             _inlineDraggingSelection = true;
+            BeginInlineSelectionDragPreview();
             UpdateInlineToolButtons();
             SyncInlineColorFromSelection(_inlineAnnotations[hitAnnotation]);
             EditorViewport.Cursor = WpfCursors.SizeAll;
@@ -1002,6 +1058,7 @@ public partial class HistoryLibraryWindow
             _inlineDraggingSelection = false;
             _inlineAllowOutsideDrag = false;
             ClearInlinePreview();
+            RestoreInlineSelectionDragPreview();
             BeginInlineTextEditing(_inlineDragStart, textIndex);
             e.Handled = true;
             return;
@@ -1043,11 +1100,15 @@ public partial class HistoryLibraryWindow
         ClearInlinePreview();
         if (changed)
         {
+            CommitInlineSelectionDragPreview();
             SaveInlineEditor();
             ShowInlineSelection();
         }
         else
+        {
+            RestoreInlineSelectionDragPreview();
             ShowInlineSelection();
+        }
         e.Handled = true;
     }
 
@@ -1181,6 +1242,12 @@ public partial class HistoryLibraryWindow
             return;
         }
 
+        if (_inlineCropMode == InlineCropMode.CopySelection)
+        {
+            CopyInlineSelection(selection);
+            return;
+        }
+
         if (selection.Width < 10 || selection.Height < 10 || selection == imageBounds)
             return;
 
@@ -1214,6 +1281,28 @@ public partial class HistoryLibraryWindow
         finally
         {
             croppedBase?.Dispose();
+        }
+    }
+
+    private void CopyInlineSelection(DrawingRectangle selection)
+    {
+        if (_inlineProject is null)
+            return;
+
+        try
+        {
+            using var flattened = RegionOverlayForm.RenderEditorProject(
+                _inlineProject.BaseImage,
+                _inlineAnnotations,
+                strokeShadow: false);
+            using var region = EditableScreenshotService.ExtractRegion(flattened, selection);
+            ClipboardService.CopyToClipboard(region);
+            ToastWindow.Show("Region copied", $"{region.Width} × {region.Height} pixels copied to clipboard");
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.copy-region", ex);
+            ToastWindow.ShowError("Copy region failed", ex.Message);
         }
     }
 
@@ -1589,11 +1678,14 @@ public partial class HistoryLibraryWindow
         }
 
         _inlineQueuedSaveJob?.BaseImage.Dispose();
+        long sequence = ++_inlineNextSaveSequence;
+        _inlineLatestSaveSequenceByPath[item.Entry.FilePath] = sequence;
         _inlineQueuedSaveJob = new InlineSaveJob(
             baseImage,
             _inlineAnnotations.ToList(),
             item,
-            item.Entry.FilePath);
+            item.Entry.FilePath,
+            sequence);
         RefreshPendingInlineAnnotations();
 
         if (!_inlineSaveLoopRunning)
@@ -1611,20 +1703,37 @@ public partial class HistoryLibraryWindow
             while (_inlineQueuedSaveJob is { } job)
             {
                 _inlineQueuedSaveJob = null;
+                InlineSaveResult? result = null;
+                InlineSaveOperation? operation = null;
+                bool claimed = false;
                 try
                 {
-                    var result = await RunInlineSaveOnStaThreadAsync(job);
-                    ApplyInlineSaveResult(job, result);
+                    operation = new InlineSaveOperation(job, RunInlineSaveOnStaThreadAsync(job));
+                    _inlineActiveSaveOperation = operation;
+                    result = await operation.Task;
+                    claimed = operation.TryClaim();
+                    if (claimed && IsLatestInlineSaveJob(job))
+                        ApplyInlineSaveResult(job, result);
                 }
                 catch (Exception ex)
                 {
-                    AppDiagnostics.LogError("library.inline-editor.save", ex);
-                    if (!_closed)
-                        ToastWindow.ShowError("Save failed", ex.Message);
+                    claimed = operation is null || claimed || operation.TryClaim();
+                    if (claimed)
+                    {
+                        AppDiagnostics.LogError("library.inline-editor.save", ex);
+                        if (!_closed)
+                            ToastWindow.ShowError("Save failed", ex.Message);
+                    }
                 }
                 finally
                 {
-                    job.BaseImage.Dispose();
+                    if (ReferenceEquals(_inlineActiveSaveOperation, operation))
+                        _inlineActiveSaveOperation = null;
+                    if (claimed)
+                    {
+                        result?.Dispose();
+                        job.BaseImage.Dispose();
+                    }
                 }
             }
         }
@@ -1650,13 +1759,27 @@ public partial class HistoryLibraryWindow
                 EditableScreenshotService.SaveProject(job.FilePath, job.BaseImage, job.Annotations);
                 EditableScreenshotService.SaveFlattenedImage(job.FilePath, flattened, 92);
                 var clipboardPayload = ClipboardService.PrepareImageClipboardPayload(flattened, job.FilePath);
-                ClipboardService.CopyPreparedImageToClipboard(flattened, clipboardPayload);
-                completion.SetResult(new InlineSaveResult(
-                    flattened.Width,
-                    flattened.Height,
-                    new FileInfo(job.FilePath).Length,
-                    BitmapToBitmapSource(flattened, 220),
-                    BitmapToBitmapSource(flattened)));
+                var thumbnail = BitmapToBitmapSource(flattened, 220);
+                var preview = BitmapToBitmapSource(flattened);
+                long fileSizeBytes = new FileInfo(job.FilePath).Length;
+                Bitmap? clipboardBitmap = null;
+                try
+                {
+                    clipboardBitmap = new Bitmap(flattened);
+                    completion.SetResult(new InlineSaveResult(
+                        flattened.Width,
+                        flattened.Height,
+                        fileSizeBytes,
+                        thumbnail,
+                        preview,
+                        clipboardBitmap,
+                        clipboardPayload));
+                    clipboardBitmap = null;
+                }
+                finally
+                {
+                    clipboardBitmap?.Dispose();
+                }
             }
             catch (Exception ex)
             {
@@ -1670,6 +1793,147 @@ public partial class HistoryLibraryWindow
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         return completion.Task;
+    }
+
+    internal bool FlushPendingInlineSaveOnExit(TimeSpan timeout)
+    {
+        CommitInlineTextEditor(save: true);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        bool activeSucceeded = true;
+
+        if (_inlineActiveSaveOperation is { } activeOperation)
+        {
+            if (!WaitForInlineSave(activeOperation.Task, Remaining(), "active"))
+            {
+                var timedOutQueuedJob = _inlineQueuedSaveJob;
+                _inlineQueuedSaveJob = null;
+                ScheduleInlineSaveOperationCleanup(activeOperation);
+                if (timedOutQueuedJob is not null)
+                    ScheduleInlineSaveAfterOperation(activeOperation, timedOutQueuedJob);
+                return false;
+            }
+            activeSucceeded = CompleteInlineSaveOperationOnExit(activeOperation);
+            if (ReferenceEquals(_inlineActiveSaveOperation, activeOperation))
+                _inlineActiveSaveOperation = null;
+        }
+
+        var pendingJob = _inlineQueuedSaveJob;
+        if (pendingJob is null)
+            return activeSucceeded;
+
+        _inlineQueuedSaveJob = null;
+        InlineSaveOperation pendingOperation;
+        try
+        {
+            pendingOperation = new InlineSaveOperation(pendingJob, RunInlineSaveOnStaThreadAsync(pendingJob));
+        }
+        catch (Exception ex)
+        {
+            pendingJob.BaseImage.Dispose();
+            AppDiagnostics.LogError("library.inline-editor.flush-on-exit.start-queued", ex);
+            return false;
+        }
+        if (!WaitForInlineSave(pendingOperation.Task, Remaining(), "queued"))
+        {
+            ScheduleInlineSaveOperationCleanup(pendingOperation);
+            return false;
+        }
+
+        return CompleteInlineSaveOperationOnExit(pendingOperation);
+
+        TimeSpan Remaining() => timeout - stopwatch.Elapsed;
+    }
+
+    private bool CompleteInlineSaveOperationOnExit(InlineSaveOperation operation)
+    {
+        if (!operation.TryClaim())
+            return operation.Task.IsCompletedSuccessfully;
+
+        InlineSaveResult? result = null;
+        try
+        {
+            result = operation.Task.GetAwaiter().GetResult();
+            if (IsLatestInlineSaveJob(operation.Job))
+                ApplyInlineSaveResult(operation.Job, result);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.flush-on-exit", ex);
+            return false;
+        }
+        finally
+        {
+            result?.Dispose();
+            operation.Job.BaseImage.Dispose();
+        }
+    }
+
+    private static void ScheduleInlineSaveOperationCleanup(InlineSaveOperation operation)
+    {
+        _ = operation.Task.ContinueWith(
+            _ => ReleaseInlineSaveOperation(operation),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static void ScheduleInlineSaveAfterOperation(InlineSaveOperation predecessor, InlineSaveJob job)
+    {
+        _ = predecessor.Task.ContinueWith(
+            _ =>
+            {
+                try
+                {
+                    var operation = new InlineSaveOperation(job, RunInlineSaveOnStaThreadAsync(job));
+                    ScheduleInlineSaveOperationCleanup(operation);
+                }
+                catch (Exception ex)
+                {
+                    job.BaseImage.Dispose();
+                    AppDiagnostics.LogError("library.inline-editor.flush-on-exit.start-deferred", ex);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static void ReleaseInlineSaveOperation(InlineSaveOperation operation)
+    {
+        if (!operation.TryClaim())
+            return;
+
+        InlineSaveResult? result = null;
+        try
+        {
+            result = operation.Task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.release-save-operation", ex);
+        }
+        finally
+        {
+            result?.Dispose();
+            operation.Job.BaseImage.Dispose();
+        }
+    }
+
+    private static bool WaitForInlineSave(Task<InlineSaveResult> task, TimeSpan timeout, string phase)
+    {
+        if (timeout <= TimeSpan.Zero)
+            return false;
+
+        try
+        {
+            return task.Wait(timeout);
+        }
+        catch (AggregateException ex)
+        {
+            AppDiagnostics.LogError($"library.inline-editor.flush-on-exit.{phase}", ex.Flatten().InnerException ?? ex);
+            return true;
+        }
     }
 
     private void ApplyInlineSaveResult(InlineSaveJob job, InlineSaveResult result)
@@ -1689,17 +1953,28 @@ public partial class HistoryLibraryWindow
         _imageSearchIndexService.NotifyHistoryMetadataChanged();
         job.Item.Thumbnail = result.Thumbnail;
 
-        if (_closed ||
-            FilmstripList.SelectedItem is not LibraryImageItem selected ||
-            !string.Equals(selected.Entry.FilePath, job.FilePath, StringComparison.OrdinalIgnoreCase))
+        bool isCurrentSelection = !_closed &&
+                                  FilmstripList.SelectedItem is LibraryImageItem selected &&
+                                  string.Equals(selected.Entry.FilePath, job.FilePath, StringComparison.OrdinalIgnoreCase);
+        if (!isCurrentSelection)
         {
             return;
         }
+
+        ClipboardService.CopyPreparedImageToClipboard(result.ClipboardBitmap, result.ClipboardPayload);
 
         if (InlineTextEditor.Visibility == Visibility.Visible)
         {
             _inlineTextPreviousPreview = result.Preview;
             _inlineTextPreviousPreviewAnnotations = job.Annotations.ToList();
+            RefreshPendingInlineAnnotations();
+            return;
+        }
+
+        if (_inlineDraggingSelection)
+        {
+            _inlineSelectionPreviousPreview = result.Preview;
+            _inlineSelectionPreviousPreviewAnnotations = job.Annotations.ToList();
             RefreshPendingInlineAnnotations();
             return;
         }
@@ -1711,18 +1986,38 @@ public partial class HistoryLibraryWindow
         RefreshPendingInlineAnnotations();
     }
 
+    private bool IsLatestInlineSaveJob(InlineSaveJob job)
+        => _inlineLatestSaveSequenceByPath.TryGetValue(job.FilePath, out long latestSequence) &&
+           latestSequence == job.Sequence;
+
     private sealed record InlineSaveJob(
         Bitmap BaseImage,
         List<Annotation> Annotations,
         LibraryImageItem Item,
-        string FilePath);
+        string FilePath,
+        long Sequence);
+
+    private sealed class InlineSaveOperation(InlineSaveJob job, Task<InlineSaveResult> task)
+    {
+        private int _claimed;
+
+        public InlineSaveJob Job { get; } = job;
+        public Task<InlineSaveResult> Task { get; } = task;
+
+        public bool TryClaim() => Interlocked.CompareExchange(ref _claimed, 1, 0) == 0;
+    }
 
     private sealed record InlineSaveResult(
         int Width,
         int Height,
         long FileSizeBytes,
         BitmapSource Thumbnail,
-        BitmapSource Preview);
+        BitmapSource Preview,
+        Bitmap ClipboardBitmap,
+        ClipboardService.ImageClipboardPayload ClipboardPayload) : IDisposable
+    {
+        public void Dispose() => ClipboardBitmap.Dispose();
+    }
 
     private sealed record InlineEditorSnapshot(List<Annotation> Annotations, Bitmap? BaseImage) : IDisposable
     {
@@ -1834,25 +2129,27 @@ public partial class HistoryLibraryWindow
         {
             if (InlineTextEditor.Visibility == Visibility.Visible && i == _inlineEditingTextIndex)
                 continue;
+            if (_inlineDraggingSelection && _inlineSelectedAnnotations.Contains(i))
+                continue;
             if (i < _inlinePreviewAnnotations.Count && Equals(_inlineAnnotations[i], _inlinePreviewAnnotations[i]))
                 continue;
-            AddPendingInlineAnnotation(_inlineAnnotations[i]);
+            AddPendingInlineAnnotation(_inlineAnnotations[i], PendingAnnotationCanvas);
         }
     }
 
-    private void AddPendingInlineAnnotation(Annotation annotation)
+    private void AddPendingInlineAnnotation(Annotation annotation, Canvas canvas)
     {
         var scale = GetInlineDisplayScale();
         switch (annotation)
         {
             case ArrowAnnotation arrow:
-                AddPendingLineWithArrow(arrow.From, arrow.To, arrow.Color, true);
+                AddPendingLineWithArrow(arrow.From, arrow.To, arrow.Color, true, canvas);
                 break;
             case LineAnnotation line:
-                AddPendingLineWithArrow(line.From, line.To, line.Color, false);
+                AddPendingLineWithArrow(line.From, line.To, line.Color, false, canvas);
                 break;
             case RulerAnnotation ruler:
-                AddPendingLineWithArrow(ruler.From, ruler.To, DrawingColor.FromArgb(255, 17, 24, 39), false);
+                AddPendingLineWithArrow(ruler.From, ruler.To, DrawingColor.FromArgb(255, 17, 24, 39), false, canvas);
                 break;
             case CurvedArrowAnnotation curved when curved.Points.Count > 1:
                 {
@@ -1866,11 +2163,12 @@ public partial class HistoryLibraryWindow
                     };
                     foreach (var point in curved.Points)
                         polyline.Points.Add(ToInlineViewportPoint(point));
-                    PendingAnnotationCanvas.Children.Add(polyline);
+                    canvas.Children.Add(polyline);
                     AddPendingArrowHead(
                         ToInlineViewportPoint(curved.Points[^2]),
                         ToInlineViewportPoint(curved.Points[^1]),
-                        curved.Color);
+                        curved.Color,
+                        canvas);
                     break;
                 }
             case DrawStroke draw when draw.Points.Count > 1:
@@ -1885,17 +2183,17 @@ public partial class HistoryLibraryWindow
                     };
                     foreach (var point in draw.Points)
                         polyline.Points.Add(ToInlineViewportPoint(point));
-                    PendingAnnotationCanvas.Children.Add(polyline);
+                    canvas.Children.Add(polyline);
                     break;
                 }
             case HighlightAnnotation highlight:
-                AddPendingRect(highlight.Rect, ToMediaBrush(highlight.Color), null, 0, false);
+                AddPendingRect(highlight.Rect, ToMediaBrush(highlight.Color), null, 0, false, canvas);
                 break;
             case BlurRect blur:
-                AddPendingRect(blur.Rect, new SolidColorBrush(MediaColor.FromArgb(110, 156, 163, 175)), MediaBrushes.White, 1, false);
+                AddPendingRect(blur.Rect, new SolidColorBrush(MediaColor.FromArgb(110, 156, 163, 175)), MediaBrushes.White, 1, false, canvas);
                 break;
             case EraserFill eraser:
-                AddPendingRect(eraser.Rect, ToMediaBrush(eraser.Color), null, 0, false);
+                AddPendingRect(eraser.Rect, ToMediaBrush(eraser.Color), null, 0, false, canvas);
                 break;
             case RectShapeAnnotation rectangle:
                 AddPendingRect(
@@ -1903,7 +2201,8 @@ public partial class HistoryLibraryWindow
                     rectangle.FillColor is { } rectFill ? ToMediaBrush(rectFill) : MediaBrushes.Transparent,
                     GetShapeStroke(rectangle.Color, rectangle.FillColor, rectangle.BorderColor),
                     3,
-                    false);
+                    false,
+                    canvas);
                 break;
             case CircleShapeAnnotation circle:
                 AddPendingRect(
@@ -1911,7 +2210,8 @@ public partial class HistoryLibraryWindow
                     circle.FillColor is { } circleFill ? ToMediaBrush(circleFill) : MediaBrushes.Transparent,
                     GetShapeStroke(circle.Color, circle.FillColor, circle.BorderColor),
                     3,
-                    true);
+                    true,
+                    canvas);
                 break;
             case StepNumberAnnotation step:
                 {
@@ -1920,7 +2220,7 @@ public partial class HistoryLibraryWindow
                     var badge = new Ellipse { Width = size, Height = size, Fill = ToMediaBrush(step.Color) };
                     Canvas.SetLeft(badge, center.X - size / 2);
                     Canvas.SetTop(badge, center.Y - size / 2);
-                    PendingAnnotationCanvas.Children.Add(badge);
+                    canvas.Children.Add(badge);
                     var label = new TextBlock
                     {
                         Text = step.Number.ToString(),
@@ -1932,7 +2232,7 @@ public partial class HistoryLibraryWindow
                     };
                     Canvas.SetLeft(label, center.X - size / 2);
                     Canvas.SetTop(label, center.Y - 10);
-                    PendingAnnotationCanvas.Children.Add(label);
+                    canvas.Children.Add(label);
                     break;
                 }
             case TextAnnotation text:
@@ -1953,7 +2253,7 @@ public partial class HistoryLibraryWindow
                         label.Width = Math.Max(40, text.MaxWidth * scale);
                     Canvas.SetLeft(label, pos.X);
                     Canvas.SetTop(label, pos.Y);
-                    PendingAnnotationCanvas.Children.Add(label);
+                    canvas.Children.Add(label);
                     break;
                 }
             case EmojiAnnotation emoji:
@@ -1962,17 +2262,22 @@ public partial class HistoryLibraryWindow
                     var label = new TextBlock { Text = emoji.Emoji, FontSize = Math.Max(16, emoji.Size * scale) };
                     Canvas.SetLeft(label, pos.X);
                     Canvas.SetTop(label, pos.Y);
-                    PendingAnnotationCanvas.Children.Add(label);
+                    canvas.Children.Add(label);
                     break;
                 }
         }
     }
 
-    private void AddPendingLineWithArrow(DrawingPoint from, DrawingPoint to, DrawingColor color, bool arrowHead)
+    private void AddPendingLineWithArrow(
+        DrawingPoint from,
+        DrawingPoint to,
+        DrawingColor color,
+        bool arrowHead,
+        Canvas canvas)
     {
         var start = ToInlineViewportPoint(from);
         var end = ToInlineViewportPoint(to);
-        PendingAnnotationCanvas.Children.Add(new Line
+        canvas.Children.Add(new Line
         {
             X1 = start.X,
             Y1 = start.Y,
@@ -1984,10 +2289,14 @@ public partial class HistoryLibraryWindow
             StrokeEndLineCap = PenLineCap.Round
         });
         if (arrowHead)
-            AddPendingArrowHead(start, end, color);
+            AddPendingArrowHead(start, end, color, canvas);
     }
 
-    private void AddPendingArrowHead(System.Windows.Point start, System.Windows.Point end, DrawingColor color)
+    private void AddPendingArrowHead(
+        System.Windows.Point start,
+        System.Windows.Point end,
+        DrawingColor color,
+        Canvas canvas)
     {
         double dx = end.X - start.X;
         double dy = end.Y - start.Y;
@@ -2000,7 +2309,7 @@ public partial class HistoryLibraryWindow
         const double headWidth = 5;
         var basePoint = new System.Windows.Point(end.X - ux * headLength, end.Y - uy * headLength);
         var normal = new System.Windows.Vector(-uy * headWidth, ux * headWidth);
-        PendingAnnotationCanvas.Children.Add(new Polygon
+        canvas.Children.Add(new Polygon
         {
             Fill = ToMediaBrush(color),
             Points = new PointCollection
@@ -2012,7 +2321,13 @@ public partial class HistoryLibraryWindow
         });
     }
 
-    private void AddPendingRect(DrawingRectangle rectangle, MediaBrush fill, MediaBrush? stroke, double strokeThickness, bool ellipse)
+    private void AddPendingRect(
+        DrawingRectangle rectangle,
+        MediaBrush fill,
+        MediaBrush? stroke,
+        double strokeThickness,
+        bool ellipse,
+        Canvas canvas)
     {
         var topLeft = ToInlineViewportPoint(rectangle.Location);
         var bottomRight = ToInlineViewportPoint(new DrawingPoint(rectangle.Right, rectangle.Bottom));
@@ -2026,7 +2341,7 @@ public partial class HistoryLibraryWindow
         shape.StrokeThickness = stroke is null ? 0 : strokeThickness;
         Canvas.SetLeft(shape, topLeft.X);
         Canvas.SetTop(shape, topLeft.Y);
-        PendingAnnotationCanvas.Children.Add(shape);
+        canvas.Children.Add(shape);
     }
 
     private static MediaBrush? GetShapeStroke(DrawingColor legacyColor, DrawingColor? fillColor, DrawingColor? borderColor)
@@ -2076,6 +2391,7 @@ public partial class HistoryLibraryWindow
             {
                 ShowInlineSelection(dx: _inlineDragCurrent.X - _inlineDragStart.X, dy: _inlineDragCurrent.Y - _inlineDragStart.Y);
             }
+            AddInlineSelectionDragPreview();
             return;
         }
 
@@ -2126,6 +2442,45 @@ public partial class HistoryLibraryWindow
             shape.Height = Math.Max(1, height);
         }
         EditorCanvas.Children.Add(shape);
+    }
+
+    private void AddInlineSelectionDragPreview()
+    {
+        int dx = _inlineDragCurrent.X - _inlineDragStart.X;
+        int dy = _inlineDragCurrent.Y - _inlineDragStart.Y;
+        foreach (int index in _inlineSelectedAnnotations.OrderBy(index => index))
+        {
+            if (index < 0 || index >= _inlineAnnotations.Count)
+                continue;
+
+            var original = _inlineSelectionOriginals.TryGetValue(index, out var snapshot)
+                ? snapshot
+                : index == _inlineSelectedAnnotation && _inlineSelectionOriginal is not null
+                    ? _inlineSelectionOriginal
+                    : _inlineAnnotations[index];
+            Annotation preview = original;
+            if (index == _inlineSelectedAnnotation &&
+                _inlineResizeHandle == InlineResizeHandle.TextRight &&
+                original is TextAnnotation text)
+            {
+                preview = ResizeInlineTextWidth(text, _inlineDragCurrent);
+            }
+            else if (index == _inlineSelectedAnnotation &&
+                     _inlineResizeHandle != InlineResizeHandle.None &&
+                     original is HighlightAnnotation highlight)
+            {
+                preview = highlight with
+                {
+                    Rect = ResizeInlineHighlight(highlight.Rect, _inlineDragCurrent, _inlineResizeHandle)
+                };
+            }
+            else
+            {
+                preview = EditableScreenshotService.Translate(original, dx, dy);
+            }
+
+            AddPendingInlineAnnotation(preview, EditorCanvas);
+        }
     }
 
     private void ShowInlineSelection(DrawingRectangle? overrideBounds = null, int dx = 0, int dy = 0)
@@ -2299,9 +2654,15 @@ public partial class HistoryLibraryWindow
         int maximumWidth = _inlineProject is null
             ? int.MaxValue
             : Math.Max(40, _inlineProject.BaseImage.Width - text.Pos.X);
-        int width = Math.Clamp(draggedPoint.X - text.Pos.X, 40, maximumWidth);
+        int width = CalculateInlineTextMaxWidthFromHandle(text.Pos.X, draggedPoint.X, maximumWidth);
         return text with { MaxWidth = width };
     }
+
+    internal static int CalculateInlineTextMaxWidthFromHandle(int textX, int handleX, int maximumWidth)
+        => Math.Clamp(
+            handleX - textX - InlineTextFrameHorizontalPadding,
+            40,
+            Math.Max(40, maximumWidth));
 
     private DrawingRectangle ResizeInlineHighlight(
         DrawingRectangle original,
@@ -2439,8 +2800,14 @@ public partial class HistoryLibraryWindow
     private static DrawingRectangle GetInlineTextFrameBounds(TextAnnotation text)
     {
         var content = MeasureInlineTextContent(text);
-        int width = text.MaxWidth > 0 ? text.MaxWidth + 10 : content.Width;
-        return new DrawingRectangle(text.Pos.X - 5, text.Pos.Y - 4, width, content.Height);
+        int width = text.MaxWidth > 0
+            ? text.MaxWidth + (InlineTextFrameHorizontalPadding * 2)
+            : content.Width;
+        return new DrawingRectangle(
+            text.Pos.X - InlineTextFrameHorizontalPadding,
+            text.Pos.Y - 4,
+            width,
+            content.Height);
     }
 
     private static DrawingRectangle MeasureInlineTextContent(TextAnnotation text)
