@@ -8,6 +8,16 @@ This repository contains a substantially modified editor and capture workflow.
 It is maintained independently by [maketeamake](https://github.com/maketeamake)
 and is not affiliated with or endorsed by the upstream OddSnap project.
 
+## Current release and support
+
+The current maintained release is **OddSnap Custom 0.8.48.31**. It targets
+[.NET 10 LTS](https://dotnet.microsoft.com/platform/support/policy), which is
+in active Microsoft support through November 14, 2028, and Windows 10 version
+2004 (build 19041) or newer, including Windows 11.
+
+Release notes and source archives are published on the
+[GitHub Releases](https://github.com/maketeamake/oddsnap-custom/releases) page.
+
 ## What is different
 
 - `F10` and `Alt+~` start region capture.
@@ -51,11 +61,11 @@ To publish a self-contained x64 build:
 dotnet publish src/OddSnap/OddSnap.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
 ```
 
-No installer or binary release is currently provided by this repository. The
-source tree intentionally excludes generated builds, captures, personal files,
-local configuration, marketing screenshots, and the upstream website bundle.
-Runtime icons and provider logos required to build and use the application are
-retained.
+The repository currently publishes source releases, not a prebuilt installer.
+The source tree intentionally excludes generated builds, captures, personal
+files, local configuration, marketing screenshots, and the upstream website
+bundle. Runtime icons and provider logos required to build and use the
+application are retained.
 
 ## Attribution and license
 
