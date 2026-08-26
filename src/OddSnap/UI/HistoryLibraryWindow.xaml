@@ -218,6 +218,7 @@
                                 <MenuItem Header="Cut out horizontal/vertical band" Tag="cutout" Click="CropModePreset_Click"/>
                                 <Separator/>
                                 <MenuItem Header="Copy region (keep image unchanged)" Tag="copy" Click="CropModePreset_Click"/>
+                                <MenuItem Header="Duplicate region as movable object" Tag="duplicate" Click="CropModePreset_Click"/>
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>

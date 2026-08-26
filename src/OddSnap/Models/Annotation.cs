@@ -19,3 +19,4 @@ public sealed record LineAnnotation(Point From, Point To, Color Color) : Annotat
 public sealed record RulerAnnotation(Point From, Point To) : Annotation;
 public sealed record RectShapeAnnotation(Rectangle Rect, Color Color, Color? FillColor = null, Color? BorderColor = null) : Annotation;
 public sealed record CircleShapeAnnotation(Rectangle Rect, Color Color, Color? FillColor = null, Color? BorderColor = null) : Annotation;
+public sealed record ImageFragmentAnnotation(Rectangle Rect, byte[] PngData) : Annotation;

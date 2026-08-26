@@ -427,6 +427,7 @@ public sealed partial class RegionOverlayForm
         EmojiAnnotation em => new Rectangle(em.Pos.X, em.Pos.Y, (int)em.Size, (int)em.Size),
         MagnifierAnnotation mg => GetMagnifierPaintBounds(mg.Pos, mg.SrcRect, Size.Empty),
         TextAnnotation ta => GetTextBounds(ta),
+        ImageFragmentAnnotation imageFragment => imageFragment.Rect,
         _ => Rectangle.Empty
     };
 
@@ -486,6 +487,7 @@ public sealed partial class RegionOverlayForm
         EmojiAnnotation em => em with { Pos = Offset(em.Pos, dx, dy) },
         MagnifierAnnotation mg => mg with { Pos = Offset(mg.Pos, dx, dy) },
         TextAnnotation ta => ta with { Pos = Offset(ta.Pos, dx, dy) },
+        ImageFragmentAnnotation imageFragment => imageFragment with { Rect = OffsetRect(imageFragment.Rect, dx, dy) },
         _ => a
     };
 
@@ -541,6 +543,7 @@ public sealed partial class RegionOverlayForm
             StepNumberAnnotation sn => sn with { Pos = ScalePt(sn.Pos) },
             DrawStroke ds => ds with { Points = ds.Points.Select(p => ScalePt(p)).ToList() },
             CurvedArrowAnnotation ca => ca with { Points = ca.Points.Select(p => ScalePt(p)).ToList() },
+            ImageFragmentAnnotation imageFragment => imageFragment with { Rect = ScaleRect(imageFragment.Rect) },
             _ => a
         };
     }

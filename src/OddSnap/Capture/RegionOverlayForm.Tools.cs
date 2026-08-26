@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Windows.Forms;
 using OddSnap.Models;
+using OddSnap.Services;
 
 namespace OddSnap.Capture;
 
@@ -129,6 +130,10 @@ public sealed partial class RegionOverlayForm
                 break;
             case EmojiAnnotation ea:
                 PaintEmojiAnnotation(g, ea.Pos, ea.Emoji, ea.Size);
+                break;
+            case ImageFragmentAnnotation imageFragment:
+                using (var fragmentBitmap = EditableScreenshotService.DecodeImageFragment(imageFragment))
+                    g.DrawImage(fragmentBitmap, imageFragment.Rect);
                 break;
         }
     }

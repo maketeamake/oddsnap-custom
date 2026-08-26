@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -44,6 +45,7 @@ public partial class HistoryLibraryWindow
     private readonly Stack<InlineEditorSnapshot> _inlineRedoStack = [];
     private readonly List<Annotation> _inlinePreviewAnnotations = [];
     private readonly Dictionary<WpfButton, (ScreenshotCaptureMode Mode, string IconId, int Shortcut)> _inlineToolButtons = [];
+    private static readonly ConditionalWeakTable<byte[], BitmapSource> InlineFragmentSources = new();
     private ScreenshotCaptureMode _inlineTool = ScreenshotCaptureMode.Select;
     private DrawingColor _inlineColor = DefaultInlineDrawingColor;
     private readonly Dictionary<ScreenshotCaptureMode, DrawingColor> _inlineToolColors = new()
@@ -108,7 +110,8 @@ public partial class HistoryLibraryWindow
     {
         KeepSelection,
         CutOutBand,
-        CopySelection
+        CopySelection,
+        DuplicateSelection
     }
 
     private void InitializeInlineToolbarVisuals()
@@ -372,12 +375,14 @@ public partial class HistoryLibraryWindow
         {
             "cutout" => InlineCropMode.CutOutBand,
             "copy" => InlineCropMode.CopySelection,
+            "duplicate" => InlineCropMode.DuplicateSelection,
             _ => InlineCropMode.KeepSelection
         };
         CropToolButton.ToolTip = _inlineCropMode switch
         {
             InlineCropMode.CutOutBand => "Cut out a horizontal or vertical band",
             InlineCropMode.CopySelection => "Copy a region without changing the image",
+            InlineCropMode.DuplicateSelection => "Duplicate a region and move it on the image",
             _ => "Crop to selection"
         };
         SetInlineEditorTool(ScreenshotCaptureMode.Crop);
@@ -833,7 +838,11 @@ public partial class HistoryLibraryWindow
         _inlineDraggingSelection = false;
         _inlineTextContentHit = false;
 
-        if (_inlineTool == ScreenshotCaptureMode.Crop)
+        bool movableFragmentHit = _inlineCropMode == InlineCropMode.DuplicateSelection &&
+                                  HitTestInlineAnnotation(imagePoint) is var fragmentIndex &&
+                                  fragmentIndex >= 0 &&
+                                  _inlineAnnotations[fragmentIndex] is ImageFragmentAnnotation;
+        if (_inlineTool == ScreenshotCaptureMode.Crop && !movableFragmentHit)
         {
             ClearInlineSelectionState();
             _inlineResizeHandle = InlineResizeHandle.None;
@@ -1145,6 +1154,9 @@ public partial class HistoryLibraryWindow
             }
             else
             {
+                var translation = GetClampedInlineSelectionTranslation(dx, dy);
+                dx = translation.X;
+                dy = translation.Y;
                 if (_inlineSelectionOriginals.Count == 0)
                     SnapshotInlineSelectionForDrag();
                 SnapshotInlineUndo();
@@ -1248,6 +1260,12 @@ public partial class HistoryLibraryWindow
             return;
         }
 
+        if (_inlineCropMode == InlineCropMode.DuplicateSelection)
+        {
+            DuplicateInlineSelection(selection);
+            return;
+        }
+
         if (selection.Width < 10 || selection.Height < 10 || selection == imageBounds)
             return;
 
@@ -1303,6 +1321,34 @@ public partial class HistoryLibraryWindow
         {
             AppDiagnostics.LogError("library.inline-editor.copy-region", ex);
             ToastWindow.ShowError("Copy region failed", ex.Message);
+        }
+    }
+
+    private void DuplicateInlineSelection(DrawingRectangle selection)
+    {
+        if (_inlineProject is null)
+            return;
+
+        try
+        {
+            using var flattened = RegionOverlayForm.RenderEditorProject(
+                _inlineProject.BaseImage,
+                _inlineAnnotations,
+                strokeShadow: false);
+            var fragment = EditableScreenshotService.CreateImageFragment(flattened, selection);
+            SnapshotInlineUndo();
+            _inlineAnnotations.Add(fragment);
+            SelectOnlyInlineAnnotation(_inlineAnnotations.Count - 1);
+            SnapshotInlineSelectionForDrag();
+            _inlineResizeHandle = InlineResizeHandle.None;
+            SaveInlineEditor();
+            ShowInlineSelection();
+            ToastWindow.Show("Movable region created", "Drag the selected region to place its copy on the image");
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.duplicate-region", ex);
+            ToastWindow.ShowError("Duplicate region failed", ex.Message);
         }
     }
 
@@ -2265,7 +2311,35 @@ public partial class HistoryLibraryWindow
                     canvas.Children.Add(label);
                     break;
                 }
+            case ImageFragmentAnnotation imageFragment:
+                {
+                    var topLeft = ToInlineViewportPoint(imageFragment.Rect.Location);
+                    var bottomRight = ToInlineViewportPoint(new DrawingPoint(imageFragment.Rect.Right, imageFragment.Rect.Bottom));
+                    var image = new WpfImage
+                    {
+                        Source = InlineFragmentSources.GetValue(imageFragment.PngData, CreateInlineFragmentSource),
+                        Width = Math.Max(1, bottomRight.X - topLeft.X),
+                        Height = Math.Max(1, bottomRight.Y - topLeft.Y),
+                        Stretch = Stretch.Fill
+                    };
+                    Canvas.SetLeft(image, topLeft.X);
+                    Canvas.SetTop(image, topLeft.Y);
+                    canvas.Children.Add(image);
+                    break;
+                }
         }
+    }
+
+    private static BitmapSource CreateInlineFragmentSource(byte[] pngData)
+    {
+        using var stream = new MemoryStream(pngData, writable: false);
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        return image;
     }
 
     private void AddPendingLineWithArrow(
@@ -2389,7 +2463,10 @@ public partial class HistoryLibraryWindow
             }
             else
             {
-                ShowInlineSelection(dx: _inlineDragCurrent.X - _inlineDragStart.X, dy: _inlineDragCurrent.Y - _inlineDragStart.Y);
+                var translation = GetClampedInlineSelectionTranslation(
+                    _inlineDragCurrent.X - _inlineDragStart.X,
+                    _inlineDragCurrent.Y - _inlineDragStart.Y);
+                ShowInlineSelection(dx: translation.X, dy: translation.Y);
             }
             AddInlineSelectionDragPreview();
             return;
@@ -2446,8 +2523,11 @@ public partial class HistoryLibraryWindow
 
     private void AddInlineSelectionDragPreview()
     {
-        int dx = _inlineDragCurrent.X - _inlineDragStart.X;
-        int dy = _inlineDragCurrent.Y - _inlineDragStart.Y;
+        var translation = GetClampedInlineSelectionTranslation(
+            _inlineDragCurrent.X - _inlineDragStart.X,
+            _inlineDragCurrent.Y - _inlineDragStart.Y);
+        int dx = translation.X;
+        int dy = translation.Y;
         foreach (int index in _inlineSelectedAnnotations.OrderBy(index => index))
         {
             if (index < 0 || index >= _inlineAnnotations.Count)
@@ -2481,6 +2561,40 @@ public partial class HistoryLibraryWindow
 
             AddPendingInlineAnnotation(preview, EditorCanvas);
         }
+    }
+
+    private DrawingPoint GetClampedInlineSelectionTranslation(int requestedDx, int requestedDy)
+    {
+        if (_inlineProject is null)
+            return new DrawingPoint(requestedDx, requestedDy);
+
+        int minimumDx = int.MinValue;
+        int maximumDx = int.MaxValue;
+        int minimumDy = int.MinValue;
+        int maximumDy = int.MaxValue;
+        bool hasFragment = false;
+        foreach (int index in _inlineSelectedAnnotations)
+        {
+            var original = _inlineSelectionOriginals.TryGetValue(index, out var snapshot)
+                ? snapshot
+                : index >= 0 && index < _inlineAnnotations.Count
+                    ? _inlineAnnotations[index]
+                    : null;
+            if (original is not ImageFragmentAnnotation fragment)
+                continue;
+
+            hasFragment = true;
+            minimumDx = Math.Max(minimumDx, -fragment.Rect.Left);
+            maximumDx = Math.Min(maximumDx, _inlineProject.BaseImage.Width - fragment.Rect.Right);
+            minimumDy = Math.Max(minimumDy, -fragment.Rect.Top);
+            maximumDy = Math.Min(maximumDy, _inlineProject.BaseImage.Height - fragment.Rect.Bottom);
+        }
+
+        if (!hasFragment || minimumDx > maximumDx || minimumDy > maximumDy)
+            return new DrawingPoint(requestedDx, requestedDy);
+        return new DrawingPoint(
+            Math.Clamp(requestedDx, minimumDx, maximumDx),
+            Math.Clamp(requestedDy, minimumDy, maximumDy));
     }
 
     private void ShowInlineSelection(DrawingRectangle? overrideBounds = null, int dx = 0, int dy = 0)
@@ -2721,6 +2835,7 @@ public partial class HistoryLibraryWindow
             DrawStroke value => IsPointNearPath(point, value.Points, toleranceSquared),
             TextAnnotation value => IsInlineTextContentHit(value, point) ||
                                     IsPointNearInlineRectangleBorder(point, GetInlineTextFrameBounds(value), tolerance),
+            ImageFragmentAnnotation value => value.Rect.Contains(point),
             _ => Inflate(GetInlineAnnotationBounds(annotation), tolerance).Contains(point)
         };
     }
@@ -2791,6 +2906,7 @@ public partial class HistoryLibraryWindow
         TextAnnotation value => GetInlineTextFrameBounds(value),
         MagnifierAnnotation value => new DrawingRectangle(value.Pos.X - 64, value.Pos.Y - 64, 128, 128),
         EmojiAnnotation value => new DrawingRectangle(value.Pos.X, value.Pos.Y, (int)value.Size, (int)value.Size),
+        ImageFragmentAnnotation value => value.Rect,
         _ => DrawingRectangle.Empty
     };
 

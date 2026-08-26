@@ -10,7 +10,7 @@ and is not affiliated with or endorsed by the upstream OddSnap project.
 
 ## Current release and support
 
-The current maintained release is **OddSnap Custom 0.8.48.31**. It targets
+The current maintained release is **OddSnap Custom 0.8.48.32**. It targets
 [.NET 10 LTS](https://dotnet.microsoft.com/platform/support/policy), which is
 in active Microsoft support through November 14, 2028, and Windows 10 version
 2004 (build 19041) or newer, including Windows 11.
@@ -33,6 +33,8 @@ Release notes and source archives are published on the
   multi-selected with `Shift`.
 - Crop and cut-out operations support undo/redo; `Shift` constrains arrows to a
   horizontal or vertical axis.
+- A selected region can be copied to the clipboard or duplicated as a movable,
+  persistent object without changing the original pixels.
 - `Enter` or `Ctrl+C` copies the current image and minimizes the Library.
 
 The project also retains the broader capture, OCR, recording, upload, and
@@ -52,7 +54,7 @@ dotnet format whitespace OddSnap.sln --verify-no-changes --no-restore
 dotnet format style OddSnap.sln --verify-no-changes --severity warn --no-restore
 dotnet format analyzers OddSnap.sln --verify-no-changes --severity warn --no-restore
 dotnet build OddSnap.sln -c Release --no-restore -warnaserror
-dotnet test src/OddSnap.Tests/OddSnap.Tests.csproj -c Release --no-build
+dotnet test --project src/OddSnap.Tests/OddSnap.Tests.csproj -c Release --no-build --minimum-expected-tests 1
 ```
 
 To publish a self-contained x64 build:

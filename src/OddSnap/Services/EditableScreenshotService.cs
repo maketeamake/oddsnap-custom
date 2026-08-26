@@ -177,6 +177,7 @@ public static class EditableScreenshotService
         RulerAnnotation a => StoredAnnotation.LineEntry("ruler", a.From, a.To, Color.Empty),
         RectShapeAnnotation a => StoredAnnotation.ShapeEntry("rect", a.Rect, a.Color, a.FillColor, a.BorderColor),
         CircleShapeAnnotation a => StoredAnnotation.ShapeEntry("circle", a.Rect, a.Color, a.FillColor, a.BorderColor),
+        ImageFragmentAnnotation a => new() { Kind = "imageFragment", X1 = a.Rect.X, Y1 = a.Rect.Y, Width = a.Rect.Width, Height = a.Rect.Height, Data = a.PngData },
         _ => throw new NotSupportedException($"Unsupported annotation type {annotation.GetType().Name}")
     };
 
@@ -196,6 +197,7 @@ public static class EditableScreenshotService
         "ruler" => new RulerAnnotation(ToPoint1(a), ToPoint2(a)),
         "rect" => new RectShapeAnnotation(ToRect(a), Color.FromArgb(a.ColorArgb), ToOptionalColor(a.FillColorArgb), ToOptionalColor(a.BorderColorArgb)),
         "circle" => new CircleShapeAnnotation(ToRect(a), Color.FromArgb(a.ColorArgb), ToOptionalColor(a.FillColorArgb), ToOptionalColor(a.BorderColorArgb)),
+        "imageFragment" => new ImageFragmentAnnotation(ToRect(a), a.Data is { Length: > 0 } ? a.Data : throw new InvalidDataException("Image fragment data is missing.")),
         _ => throw new InvalidDataException($"Unknown annotation kind '{a.Kind}'")
     };
 
@@ -215,6 +217,7 @@ public static class EditableScreenshotService
         RulerAnnotation x => x with { From = Offset(x.From, dx, dy), To = Offset(x.To, dx, dy) },
         RectShapeAnnotation x => x with { Rect = Offset(x.Rect, dx, dy) },
         CircleShapeAnnotation x => x with { Rect = Offset(x.Rect, dx, dy) },
+        ImageFragmentAnnotation x => x with { Rect = Offset(x.Rect, dx, dy) },
         _ => a
     };
 
@@ -239,8 +242,30 @@ public static class EditableScreenshotService
         RulerAnnotation x => x with { From = Scale(x.From, sx, sy), To = Scale(x.To, sx, sy) },
         RectShapeAnnotation x => x with { Rect = Scale(x.Rect, sx, sy) },
         CircleShapeAnnotation x => x with { Rect = Scale(x.Rect, sx, sy) },
+        ImageFragmentAnnotation x => x with { Rect = Scale(x.Rect, sx, sy) },
         _ => a
     };
+
+    internal static ImageFragmentAnnotation CreateImageFragment(Bitmap source, Rectangle requestedRegion)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var sourceBounds = new Rectangle(0, 0, source.Width, source.Height);
+        var regionBounds = Rectangle.Intersect(sourceBounds, requestedRegion);
+        using var region = ExtractRegion(source, regionBounds);
+        using var stream = new MemoryStream();
+        CaptureOutputService.WritePng(region, stream);
+        return new ImageFragmentAnnotation(regionBounds, stream.ToArray());
+    }
+
+    internal static Bitmap DecodeImageFragment(ImageFragmentAnnotation fragment)
+    {
+        ArgumentNullException.ThrowIfNull(fragment);
+        if (fragment.PngData.Length == 0)
+            throw new InvalidDataException("Image fragment data is empty.");
+        using var stream = new MemoryStream(fragment.PngData, writable: false);
+        using var encoded = new Bitmap(stream);
+        return new Bitmap(encoded);
+    }
 
     internal static Bitmap ExtractRegion(Bitmap source, Rectangle requestedRegion)
     {
@@ -325,6 +350,7 @@ public static class EditableScreenshotService
         public bool Stroke { get; set; }
         public bool Shadow { get; set; }
         public bool Background { get; set; }
+        public byte[]? Data { get; set; }
         public List<StoredPoint>? Points { get; set; }
 
         public static StoredAnnotation RectEntry(string kind, Rectangle rect, Color color = default) => new()
