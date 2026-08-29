@@ -563,8 +563,26 @@ public partial class HistoryLibraryWindow : Window
 
     private void DeleteSelected_Click(object sender, RoutedEventArgs e)
     {
-        if (FilmstripList.SelectedItem is not LibraryImageItem item)
+        DeleteSelectedScreenshot();
+    }
+
+    private void DeleteFilmstripItem_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is not FrameworkElement { DataContext: LibraryImageItem item })
             return;
+        FilmstripList.SelectedItem = item;
+        DeleteScreenshot(item);
+    }
+
+    private void DeleteSelectedScreenshot()
+    {
+        if (FilmstripList.SelectedItem is LibraryImageItem item)
+            DeleteScreenshot(item);
+    }
+
+    private void DeleteScreenshot(LibraryImageItem item)
+    {
         if (!ThemedConfirmDialog.Confirm(
                 this,
                 "Delete screenshot?",

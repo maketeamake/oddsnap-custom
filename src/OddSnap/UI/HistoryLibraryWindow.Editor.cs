@@ -71,6 +71,7 @@ public partial class HistoryLibraryWindow
     private InlineResizeHandle _inlineResizeHandle;
     private bool _inlineTextContentHit;
     private int _inlineEditingTextIndex = -1;
+    private int _inlineEditingStepIndex = -1;
     private DrawingPoint _inlineTextPosition;
     private int _inlineTextMaxWidth;
     private int _inlineTextEditorHeight;
@@ -85,6 +86,8 @@ public partial class HistoryLibraryWindow
     private string _inlineTextFontFamily = "Segoe UI";
     private ImageSource? _inlineTextPreviousPreview;
     private List<Annotation>? _inlineTextPreviousPreviewAnnotations;
+    private ImageSource? _inlineStepPreviousPreview;
+    private List<Annotation>? _inlineStepPreviousPreviewAnnotations;
     private ImageSource? _inlineSelectionPreviousPreview;
     private List<Annotation>? _inlineSelectionPreviousPreviewAnnotations;
     private string _inlineSelectedEmoji = "✅";
@@ -233,12 +236,15 @@ public partial class HistoryLibraryWindow
     private void DisposeInlineEditorProject()
     {
         CommitInlineTextEditor(save: false);
+        CommitInlineStepEditor(save: false);
         _inlineProject?.Dispose();
         _inlineProject = null;
         _inlineAnnotations.Clear();
         _inlinePreviewAnnotations.Clear();
         _inlineSelectionPreviousPreview = null;
         _inlineSelectionPreviousPreviewAnnotations = null;
+        _inlineStepPreviousPreview = null;
+        _inlineStepPreviousPreviewAnnotations = null;
         ClearInlineHistoryStack(_inlineUndoStack);
         ClearInlineHistoryStack(_inlineRedoStack);
         ClearInlineSelectionState();
@@ -250,6 +256,7 @@ public partial class HistoryLibraryWindow
     private void SetInlineEditorTool(ScreenshotCaptureMode mode)
     {
         CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
         _inlineTool = mode;
         RestoreInlineToolColor();
         ClearInlineSelectionState();
@@ -430,6 +437,7 @@ public partial class HistoryLibraryWindow
     private void ActivateInlinePresetTool(ScreenshotCaptureMode mode)
     {
         CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
         _inlineTool = mode;
         UpdateInlineToolButtons();
         EditorViewport.Cursor = mode == ScreenshotCaptureMode.Text ? WpfCursors.IBeam : WpfCursors.Cross;
@@ -811,8 +819,15 @@ public partial class HistoryLibraryWindow
         }
         else if (e.Key == Key.Delete)
         {
-            DeleteInlineSelection();
+            if (_inlineSelectedAnnotations.Count > 0)
+                DeleteInlineSelection();
+            else
+                DeleteSelectedScreenshot();
             e.Handled = true;
+        }
+        else if (e.Key == Key.F2)
+        {
+            e.Handled = TryBeginInlineSelectionEditing();
         }
         else if (e.Key == Key.Enter)
         {
@@ -837,6 +852,24 @@ public partial class HistoryLibraryWindow
         _inlineAllowOutsideDrag = allowOutside;
         _inlineDraggingSelection = false;
         _inlineTextContentHit = false;
+
+        int doubleClickHit = HitTestInlineAnnotation(imagePoint);
+        if (e.ClickCount >= 2 && doubleClickHit >= 0)
+        {
+            ClearInlinePreview();
+            if (_inlineAnnotations[doubleClickHit] is TextAnnotation)
+            {
+                BeginInlineTextEditing(imagePoint, doubleClickHit);
+                e.Handled = true;
+                return;
+            }
+            if (_inlineAnnotations[doubleClickHit] is StepNumberAnnotation)
+            {
+                BeginInlineStepEditing(doubleClickHit);
+                e.Handled = true;
+                return;
+            }
+        }
 
         bool movableFragmentHit = _inlineCropMode == InlineCropMode.DuplicateSelection &&
                                   HitTestInlineAnnotation(imagePoint) is var fragmentIndex &&
@@ -1054,6 +1087,24 @@ public partial class HistoryLibraryWindow
 
         int selectionDx = _inlineDragCurrent.X - _inlineDragStart.X;
         int selectionDy = _inlineDragCurrent.Y - _inlineDragStart.Y;
+        if (_inlineDraggingSelection &&
+            _inlineTool == ScreenshotCaptureMode.StepNumber &&
+            _inlineSelectedAnnotations.Count == 1 &&
+            _inlineSelectedAnnotation >= 0 &&
+            _inlineSelectedAnnotation < _inlineAnnotations.Count &&
+            _inlineAnnotations[_inlineSelectedAnnotation] is StepNumberAnnotation &&
+            Math.Abs(selectionDx) + Math.Abs(selectionDy) <= 2)
+        {
+            int stepIndex = _inlineSelectedAnnotation;
+            _inlineDraggingSelection = false;
+            _inlineAllowOutsideDrag = false;
+            ClearInlinePreview();
+            RestoreInlineSelectionDragPreview();
+            BeginInlineStepEditing(stepIndex);
+            e.Handled = true;
+            return;
+        }
+
         if (_inlineDraggingSelection &&
             _inlineTool == ScreenshotCaptureMode.Text &&
             _inlineSelectedAnnotations.Count == 1 &&
@@ -1455,6 +1506,7 @@ public partial class HistoryLibraryWindow
         int requestedHeight = 0)
     {
         CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
         _inlineEditingTextIndex = existingIndex >= 0 ? existingIndex : HitTestInlineText(point);
         TextAnnotation? existing = _inlineEditingTextIndex >= 0
             ? (TextAnnotation)_inlineAnnotations[_inlineEditingTextIndex]
@@ -1513,6 +1565,133 @@ public partial class HistoryLibraryWindow
         InlineTextEditor.Focus();
         InlineTextEditor.CaretIndex = InlineTextEditor.Text.Length;
         InlineTextEditor.Select(InlineTextEditor.CaretIndex, 0);
+    }
+
+    private bool TryBeginInlineSelectionEditing()
+    {
+        if (_inlineSelectedAnnotations.Count != 1 ||
+            _inlineSelectedAnnotation < 0 ||
+            _inlineSelectedAnnotation >= _inlineAnnotations.Count)
+        {
+            return false;
+        }
+
+        ClearInlinePreview();
+        if (_inlineAnnotations[_inlineSelectedAnnotation] is TextAnnotation text)
+        {
+            BeginInlineTextEditing(text.Pos, _inlineSelectedAnnotation);
+            return true;
+        }
+        if (_inlineAnnotations[_inlineSelectedAnnotation] is StepNumberAnnotation)
+        {
+            BeginInlineStepEditing(_inlineSelectedAnnotation);
+            return true;
+        }
+        return false;
+    }
+
+    private void BeginInlineStepEditing(int index)
+    {
+        CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
+        if (_inlineProject is null ||
+            index < 0 ||
+            index >= _inlineAnnotations.Count ||
+            _inlineAnnotations[index] is not StepNumberAnnotation step)
+        {
+            return;
+        }
+
+        _inlineEditingStepIndex = index;
+        SelectOnlyInlineAnnotation(index);
+        _inlineStepPreviousPreview = PreviewImage.Source;
+        _inlineStepPreviousPreviewAnnotations = _inlinePreviewAnnotations.ToList();
+        PreviewImage.Source = BitmapToBitmapSource(_inlineProject.BaseImage);
+        _inlinePreviewAnnotations.Clear();
+        PositionInlineStepEditor(step.Pos);
+        InlineStepEditor.Text = step.Number.ToString(CultureInfo.InvariantCulture);
+        InlineStepEditor.Foreground = ToMediaBrush(step.Color);
+        InlineStepEditor.Visibility = Visibility.Visible;
+        RefreshPendingInlineAnnotations();
+        InlineStepEditor.Focus();
+        InlineStepEditor.SelectAll();
+    }
+
+    private void InlineStepEditor_PreviewKeyDown(object sender, WpfKeyEventArgs e)
+    {
+        if (e.Key is Key.Enter or Key.Return)
+        {
+            e.Handled = true;
+            CommitInlineStepEditor(save: true);
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            InlineStepEditor.Visibility = Visibility.Collapsed;
+            _inlineEditingStepIndex = -1;
+            RestoreInlineStepPreview();
+            EditorViewport.Focus();
+        }
+    }
+
+    private void InlineStepEditor_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        => CommitInlineStepEditor(save: true, focusViewport: false);
+
+    private void CommitInlineStepEditor(bool save, bool focusViewport = true)
+    {
+        if (InlineStepEditor.Visibility != Visibility.Visible)
+            return;
+
+        InlineStepEditor.Visibility = Visibility.Collapsed;
+        int index = _inlineEditingStepIndex;
+        _inlineEditingStepIndex = -1;
+        bool valid = TryParseInlineStepNumber(InlineStepEditor.Text, out int number);
+        bool changed = valid &&
+                       index >= 0 &&
+                       index < _inlineAnnotations.Count &&
+                       _inlineAnnotations[index] is StepNumberAnnotation currentStep &&
+                       currentStep.Number != number;
+        if (changed)
+        {
+            SnapshotInlineUndo();
+            var existingStep = (StepNumberAnnotation)_inlineAnnotations[index];
+            _inlineAnnotations[index] = existingStep with { Number = number };
+        }
+
+        if (index >= 0 && index < _inlineAnnotations.Count)
+            SelectOnlyInlineAnnotation(index);
+        if (focusViewport)
+            EditorViewport.Focus();
+
+        if (changed && save)
+        {
+            _inlineStepPreviousPreview = null;
+            _inlineStepPreviousPreviewAnnotations = null;
+            RefreshPendingInlineAnnotations();
+            SaveInlineEditor();
+        }
+        else
+        {
+            RestoreInlineStepPreview();
+        }
+        ShowInlineSelection();
+    }
+
+    internal static bool TryParseInlineStepNumber(string? text, out int number)
+        => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out number) &&
+           number is >= 1 and <= 9999;
+
+    private void RestoreInlineStepPreview()
+    {
+        if (_inlineStepPreviousPreview is null)
+            return;
+        PreviewImage.Source = _inlineStepPreviousPreview;
+        _inlinePreviewAnnotations.Clear();
+        if (_inlineStepPreviousPreviewAnnotations is not null)
+            _inlinePreviewAnnotations.AddRange(_inlineStepPreviousPreviewAnnotations);
+        _inlineStepPreviousPreview = null;
+        _inlineStepPreviousPreviewAnnotations = null;
+        RefreshPendingInlineAnnotations();
     }
 
     private void InlineTextEditor_PreviewKeyDown(object sender, WpfKeyEventArgs e)
@@ -1642,6 +1821,7 @@ public partial class HistoryLibraryWindow
     private void UndoInlineEdit()
     {
         CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
         if (_inlineUndoStack.Count == 0 || _inlineProject is null)
             return;
 
@@ -1653,6 +1833,7 @@ public partial class HistoryLibraryWindow
     private void RedoInlineEdit()
     {
         CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
         if (_inlineRedoStack.Count == 0 || _inlineProject is null)
             return;
 
@@ -1690,6 +1871,7 @@ public partial class HistoryLibraryWindow
     private void DeleteInlineSelection()
     {
         CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
         var selected = _inlineSelectedAnnotations
             .Where(index => index >= 0 && index < _inlineAnnotations.Count)
             .OrderByDescending(index => index)
@@ -2017,6 +2199,14 @@ public partial class HistoryLibraryWindow
             return;
         }
 
+        if (InlineStepEditor.Visibility == Visibility.Visible)
+        {
+            _inlineStepPreviousPreview = result.Preview;
+            _inlineStepPreviousPreviewAnnotations = job.Annotations.ToList();
+            RefreshPendingInlineAnnotations();
+            return;
+        }
+
         if (_inlineDraggingSelection)
         {
             _inlineSelectionPreviousPreview = result.Preview;
@@ -2158,11 +2348,30 @@ public partial class HistoryLibraryWindow
         InlineTextEditor.Height = Math.Max(42, Math.Min(bottomRight.Y - screen.Y, EditorViewport.ActualHeight - screen.Y - 8));
     }
 
+    private void PositionInlineStepEditor(DrawingPoint point)
+    {
+        var center = ToInlineViewportPoint(point);
+        InlineStepEditor.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
+        InlineStepEditor.VerticalAlignment = System.Windows.VerticalAlignment.Top;
+        InlineStepEditor.Margin = new Thickness(
+            Math.Clamp(center.X - InlineStepEditor.Width / 2d, 0d, Math.Max(0d, EditorViewport.ActualWidth - InlineStepEditor.Width)),
+            Math.Clamp(center.Y - InlineStepEditor.Height / 2d, 0d, Math.Max(0d, EditorViewport.ActualHeight - InlineStepEditor.Height)),
+            0,
+            0);
+    }
+
     private void EditorViewport_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         RefreshPendingInlineAnnotations();
         if (InlineTextEditor.Visibility == Visibility.Visible)
             PositionInlineTextEditor(_inlineTextPosition, _inlineTextMaxWidth, _inlineTextEditorHeight);
+        if (InlineStepEditor.Visibility == Visibility.Visible &&
+            _inlineEditingStepIndex >= 0 &&
+            _inlineEditingStepIndex < _inlineAnnotations.Count &&
+            _inlineAnnotations[_inlineEditingStepIndex] is StepNumberAnnotation step)
+        {
+            PositionInlineStepEditor(step.Pos);
+        }
     }
 
     private void RefreshPendingInlineAnnotations()
@@ -2174,6 +2383,8 @@ public partial class HistoryLibraryWindow
         for (int i = 0; i < _inlineAnnotations.Count; i++)
         {
             if (InlineTextEditor.Visibility == Visibility.Visible && i == _inlineEditingTextIndex)
+                continue;
+            if (InlineStepEditor.Visibility == Visibility.Visible && i == _inlineEditingStepIndex)
                 continue;
             if (_inlineDraggingSelection && _inlineSelectedAnnotations.Contains(i))
                 continue;
@@ -2288,12 +2499,14 @@ public partial class HistoryLibraryWindow
                     {
                         Text = text.Text,
                         TextWrapping = TextWrapping.Wrap,
-                        Foreground = ToMediaBrush(text.Color),
+                        Foreground = text.Background ? MediaBrushes.White : ToMediaBrush(text.Color),
                         FontFamily = new System.Windows.Media.FontFamily(text.FontFamily),
                         FontSize = Math.Max(1d, text.FontSize * (96d / 72d) * scale),
                         FontWeight = text.Bold ? FontWeights.Bold : FontWeights.Normal,
                         FontStyle = text.Italic ? FontStyles.Italic : FontStyles.Normal,
-                        Background = text.Background ? ToMediaBrush(text.Color) : MediaBrushes.Transparent
+                        Background = text.Background ? ToMediaBrush(text.Color) : MediaBrushes.Transparent,
+                        TextAlignment = TextAlignment.Left,
+                        IsHitTestVisible = false
                     };
                     if (text.MaxWidth > 0)
                         label.Width = Math.Max(40, text.MaxWidth * scale);
@@ -2450,25 +2663,29 @@ public partial class HistoryLibraryWindow
         var brush = new SolidColorBrush(MediaColor.FromArgb(_inlineColor.A, _inlineColor.R, _inlineColor.G, _inlineColor.B));
         if (_inlineDraggingSelection)
         {
+            AddInlineSelectionDragPreview();
             if (_inlineResizeHandle == InlineResizeHandle.TextRight &&
                 _inlineSelectionOriginal is TextAnnotation text)
             {
-                ShowInlineSelection(GetInlineTextFrameBounds(ResizeInlineTextWidth(text, _inlineDragCurrent)));
+                ShowInlineSelection(
+                    GetInlineTextFrameBounds(ResizeInlineTextWidth(text, _inlineDragCurrent)),
+                    clearPreview: false);
             }
             else if (_inlineResizeHandle != InlineResizeHandle.None &&
                 _inlineSelectedAnnotations.Count == 1 &&
                 _inlineSelectionOriginal is HighlightAnnotation highlight)
             {
-                ShowInlineSelection(ResizeInlineHighlight(highlight.Rect, _inlineDragCurrent, _inlineResizeHandle));
+                ShowInlineSelection(
+                    ResizeInlineHighlight(highlight.Rect, _inlineDragCurrent, _inlineResizeHandle),
+                    clearPreview: false);
             }
             else
             {
                 var translation = GetClampedInlineSelectionTranslation(
                     _inlineDragCurrent.X - _inlineDragStart.X,
                     _inlineDragCurrent.Y - _inlineDragStart.Y);
-                ShowInlineSelection(dx: translation.X, dy: translation.Y);
+                ShowInlineSelection(dx: translation.X, dy: translation.Y, clearPreview: false);
             }
-            AddInlineSelectionDragPreview();
             return;
         }
 
@@ -2597,9 +2814,14 @@ public partial class HistoryLibraryWindow
             Math.Clamp(requestedDy, minimumDy, maximumDy));
     }
 
-    private void ShowInlineSelection(DrawingRectangle? overrideBounds = null, int dx = 0, int dy = 0)
+    private void ShowInlineSelection(
+        DrawingRectangle? overrideBounds = null,
+        int dx = 0,
+        int dy = 0,
+        bool clearPreview = true)
     {
-        ClearInlinePreview();
+        if (clearPreview)
+            ClearInlinePreview();
         if (_inlineSelectedAnnotations.Count == 0)
             return;
 

@@ -381,15 +381,21 @@
                                 <TextBox.Template>
                                     <ControlTemplate TargetType="TextBox">
                                         <Grid Background="Transparent">
-                                            <Rectangle Stroke="#99000000" StrokeThickness="3"
-                                                       IsHitTestVisible="False"/>
-                                            <Rectangle Stroke="#FFFFFFFF" StrokeThickness="1"
-                                                       StrokeDashArray="4,3" IsHitTestVisible="False"/>
+                                            <Rectangle Stroke="#FF60A5FA" StrokeThickness="2"
+                                                       StrokeDashArray="3,2" IsHitTestVisible="False"/>
                                             <ScrollViewer x:Name="PART_ContentHost" Background="Transparent"/>
                                         </Grid>
                                     </ControlTemplate>
                                 </TextBox.Template>
                             </TextBox>
+                            <TextBox x:Name="InlineStepEditor" Visibility="Collapsed"
+                                     Width="52" Height="38" MaxLength="4"
+                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                     Background="#FFF8FAFC" Foreground="#FFFF3B30"
+                                     BorderBrush="#FF60A5FA" BorderThickness="2"
+                                     FontSize="18" FontWeight="Bold" TextAlignment="Center"
+                                     PreviewKeyDown="InlineStepEditor_PreviewKeyDown"
+                                     LostKeyboardFocus="InlineStepEditor_LostKeyboardFocus"/>
                         </Grid>
                         <TextBlock x:Name="PreviewEmptyText" Text="Select a screenshot"
                                    Foreground="White" Opacity="0.35" FontSize="18"
@@ -453,20 +459,41 @@
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <Border Width="112" Height="88" Padding="2" CornerRadius="4"
-                                            Background="#252525" BorderThickness="2"
+                                            Background="#252525"
                                             ToolTip="{Binding ToolTip}">
                                         <Border.Style>
                                             <Style TargetType="Border">
                                                 <Setter Property="BorderBrush" Value="Transparent"/>
+                                                <Setter Property="BorderThickness" Value="2"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
-                                                        <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccentBrush}"/>
+                                                        <Setter Property="BorderBrush" Value="#FFFF3B30"/>
+                                                        <Setter Property="BorderThickness" Value="3"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
-                                        <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"
-                                               Loaded="FilmstripImage_Loaded"/>
+                                        <Grid>
+                                            <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                                                   Loaded="FilmstripImage_Loaded"/>
+                                            <Button Content="×" Width="24" Height="24" Margin="3"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                    Background="#E6B91C1C" Foreground="White"
+                                                    BorderBrush="#FFFFB4B4" BorderThickness="1"
+                                                    FontSize="17" FontWeight="Bold" Padding="0"
+                                                    ToolTip="Delete screenshot" Click="DeleteFilmstripItem_Click">
+                                                <Button.Style>
+                                                    <Style TargetType="Button">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </Grid>
                                     </Border>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
