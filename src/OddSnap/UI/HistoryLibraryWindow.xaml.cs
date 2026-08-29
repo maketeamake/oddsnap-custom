@@ -20,6 +20,8 @@ namespace OddSnap.UI;
 
 public partial class HistoryLibraryWindow : Window
 {
+    private const int DefaultCanvasWidth = 960;
+    private const int DefaultCanvasHeight = 540;
     private readonly HistoryService _historyService;
     private readonly ImageSearchIndexService _imageSearchIndexService;
     private readonly DispatcherTimer _searchTimer;
@@ -90,6 +92,30 @@ public partial class HistoryLibraryWindow : Window
         foreach (var item in _allItems)
             item.Thumbnail = null;
         DisposeInlineEditorProject();
+    }
+
+    private void NewCanvas_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            using var canvas = new System.Drawing.Bitmap(
+                DefaultCanvasWidth,
+                DefaultCanvasHeight,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var graphics = System.Drawing.Graphics.FromImage(canvas))
+                graphics.Clear(System.Drawing.Color.White);
+
+            var entry = _historyService.SaveCapture(canvas, "OddSnap", "White canvas");
+            EditableScreenshotService.SaveProject(entry.FilePath, canvas, []);
+            _imageSearchIndexService.NotifyHistoryMetadataChanged();
+            SelectCapture(entry.FilePath);
+            ToastWindow.Show("White canvas created", $"{DefaultCanvasWidth} × {DefaultCanvasHeight} pixels");
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.new-canvas", ex);
+            ToastWindow.ShowError("Could not create canvas", ex.Message);
+        }
     }
 
     private void HistoryService_Changed()

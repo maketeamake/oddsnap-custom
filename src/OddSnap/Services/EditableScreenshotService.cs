@@ -257,6 +257,16 @@ public static class EditableScreenshotService
         return new ImageFragmentAnnotation(regionBounds, stream.ToArray());
     }
 
+    internal static ImageFragmentAnnotation CreateImageFragment(Bitmap source, Point destination)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        using var stream = new MemoryStream();
+        CaptureOutputService.WritePng(source, stream);
+        return new ImageFragmentAnnotation(
+            new Rectangle(destination, source.Size),
+            stream.ToArray());
+    }
+
     internal static Bitmap DecodeImageFragment(ImageFragmentAnnotation fragment)
     {
         ArgumentNullException.ThrowIfNull(fragment);

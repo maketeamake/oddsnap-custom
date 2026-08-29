@@ -132,6 +132,16 @@
                     BorderBrush="#FF9CA3AF" BorderThickness="1"
                     HorizontalAlignment="Left">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="NewCanvasButton" Style="{StaticResource LibraryToolButton}"
+                        Click="NewCanvas_Click" ToolTip="New white canvas (960 × 540)">
+                    <Grid Width="24" Height="24">
+                        <Rectangle Width="21" Height="17" Fill="White" Stroke="#FF111827" StrokeThickness="1.5"/>
+                        <Ellipse Width="11" Height="11" Fill="#FF2563EB" Stroke="White" StrokeThickness="1"
+                                 HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                        <TextBlock Text="+" Foreground="White" FontWeight="Bold" FontSize="10"
+                                   HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,0"/>
+                    </Grid>
+                </Button>
                 <Button x:Name="SelectToolButton" Style="{StaticResource LibraryToolButton}" Click="SelectTool_Click" ToolTip="Select and move annotations"/>
                 <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
                     <Button x:Name="ArrowToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="ArrowTool_Click" ToolTip="Draw an arrow"/>
@@ -361,46 +371,52 @@
                     <Border Grid.Row="0" Background="#171717"
                             BorderBrush="{DynamicResource ThemeInputBorderBrush}" BorderThickness="1"
                             CornerRadius="8" ClipToBounds="True">
-                        <Grid>
-                        <Grid x:Name="EditorViewport" Margin="12" ClipToBounds="True"
-                              Background="Transparent"
-                              SizeChanged="EditorViewport_SizeChanged"
-                              MouseLeftButtonDown="EditorViewport_MouseLeftButtonDown"
-                              MouseMove="EditorViewport_MouseMove"
-                              MouseLeftButtonUp="EditorViewport_MouseLeftButtonUp">
-                            <Image x:Name="PreviewImage" Stretch="Uniform" IsHitTestVisible="False"/>
-                            <Canvas x:Name="PendingAnnotationCanvas" Background="Transparent" IsHitTestVisible="False"/>
-                            <Canvas x:Name="EditorCanvas" Background="Transparent"/>
-                            <TextBox x:Name="InlineTextEditor" Visibility="Collapsed" AcceptsReturn="True"
-                                     TextWrapping="Wrap" MinWidth="80" MinHeight="34"
-                                     HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
-                                     Background="Transparent" Foreground="#FFFF3B30"
-                                     BorderThickness="0" Padding="0" TextAlignment="Left"
-                                     PreviewKeyDown="InlineTextEditor_PreviewKeyDown"
-                                     LostKeyboardFocus="InlineTextEditor_LostKeyboardFocus">
-                                <TextBox.Template>
-                                    <ControlTemplate TargetType="TextBox">
-                                        <Grid Background="Transparent">
-                                            <Rectangle Stroke="#FF60A5FA" StrokeThickness="2"
-                                                       StrokeDashArray="3,2" IsHitTestVisible="False"/>
-                                            <ScrollViewer x:Name="PART_ContentHost" Background="Transparent"/>
-                                        </Grid>
-                                    </ControlTemplate>
-                                </TextBox.Template>
-                            </TextBox>
-                            <TextBox x:Name="InlineStepEditor" Visibility="Collapsed"
-                                     Width="52" Height="38" MaxLength="4"
-                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                     Background="#FFF8FAFC" Foreground="#FFFF3B30"
-                                     BorderBrush="#FF60A5FA" BorderThickness="2"
-                                     FontSize="18" FontWeight="Bold" TextAlignment="Center"
-                                     PreviewKeyDown="InlineStepEditor_PreviewKeyDown"
-                                     LostKeyboardFocus="InlineStepEditor_LostKeyboardFocus"/>
-                        </Grid>
-                        <TextBlock x:Name="PreviewEmptyText" Text="Select a screenshot"
-                                   Foreground="White" Opacity="0.35" FontSize="18"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-
+                        <Grid x:Name="EditorHost" SizeChanged="EditorViewport_SizeChanged">
+                            <ScrollViewer x:Name="EditorScrollViewer" Margin="12"
+                                          HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalContentAlignment="Center"
+                                          VerticalContentAlignment="Center"
+                                          CanContentScroll="False" PanningMode="Both"
+                                          PreviewMouseWheel="EditorViewport_PreviewMouseWheel">
+                                <Grid x:Name="EditorViewport" ClipToBounds="True"
+                                      Background="Transparent"
+                                      MouseLeftButtonDown="EditorViewport_MouseLeftButtonDown"
+                                      MouseMove="EditorViewport_MouseMove"
+                                      MouseLeftButtonUp="EditorViewport_MouseLeftButtonUp">
+                                    <Image x:Name="PreviewImage" Stretch="Fill" IsHitTestVisible="False"/>
+                                    <Canvas x:Name="PendingAnnotationCanvas" Background="Transparent" IsHitTestVisible="False"/>
+                                    <Canvas x:Name="EditorCanvas" Background="Transparent"/>
+                                    <TextBox x:Name="InlineTextEditor" Visibility="Collapsed" AcceptsReturn="True"
+                                             TextWrapping="Wrap" MinWidth="80" MinHeight="34"
+                                             HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                             Background="Transparent" Foreground="#FFFF3B30"
+                                             BorderThickness="0" Padding="0" TextAlignment="Left"
+                                             PreviewKeyDown="InlineTextEditor_PreviewKeyDown"
+                                             LostKeyboardFocus="InlineTextEditor_LostKeyboardFocus">
+                                        <TextBox.Template>
+                                            <ControlTemplate TargetType="TextBox">
+                                                <Grid Background="Transparent">
+                                                    <Rectangle Stroke="#FF60A5FA" StrokeThickness="2"
+                                                               StrokeDashArray="3,2" IsHitTestVisible="False"/>
+                                                    <ScrollViewer x:Name="PART_ContentHost" Background="Transparent"/>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </TextBox.Template>
+                                    </TextBox>
+                                    <TextBox x:Name="InlineStepEditor" Visibility="Collapsed"
+                                             Width="52" Height="38" MaxLength="4"
+                                             HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                             Background="#FFF8FAFC" Foreground="#FFFF3B30"
+                                             BorderBrush="#FF60A5FA" BorderThickness="2"
+                                             FontSize="18" FontWeight="Bold" TextAlignment="Center"
+                                             PreviewKeyDown="InlineStepEditor_PreviewKeyDown"
+                                             LostKeyboardFocus="InlineStepEditor_LostKeyboardFocus"/>
+                                </Grid>
+                            </ScrollViewer>
+                            <TextBlock x:Name="PreviewEmptyText" Text="Select a screenshot"
+                                       Foreground="White" Opacity="0.35" FontSize="18"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Grid>
                     </Border>
 

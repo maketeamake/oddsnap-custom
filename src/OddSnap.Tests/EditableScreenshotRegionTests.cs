@@ -56,6 +56,21 @@ public sealed class EditableScreenshotRegionTests
     }
 
     [Fact]
+    public void CreateImageFragmentAtDestination_PreservesImageAndPlacement()
+    {
+        using var source = new Bitmap(2, 1);
+        source.SetPixel(0, 0, Color.Gold);
+        source.SetPixel(1, 0, Color.Navy);
+
+        var fragment = EditableScreenshotService.CreateImageFragment(source, new Point(7, 9));
+        using var decoded = EditableScreenshotService.DecodeImageFragment(fragment);
+
+        Assert.Equal(new Rectangle(7, 9, 2, 1), fragment.Rect);
+        Assert.Equal(Color.Gold.ToArgb(), decoded.GetPixel(0, 0).ToArgb());
+        Assert.Equal(Color.Navy.ToArgb(), decoded.GetPixel(1, 0).ToArgb());
+    }
+
+    [Fact]
     public void ImageFragment_PersistsWithEditableProject()
     {
         string imagePath = Path.Combine(Path.GetTempPath(), $"oddsnap-fragment-{Guid.NewGuid():N}.png");

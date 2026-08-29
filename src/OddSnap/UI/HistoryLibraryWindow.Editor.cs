@@ -98,6 +98,7 @@ public partial class HistoryLibraryWindow
     private long _inlineNextSaveSequence;
     private readonly Dictionary<string, long> _inlineLatestSaveSequenceByPath = new(StringComparer.OrdinalIgnoreCase);
     private bool _suppressHistoryRefresh;
+    private double _inlineZoomFactor = 1d;
 
     private enum InlineResizeHandle
     {
@@ -213,6 +214,7 @@ public partial class HistoryLibraryWindow
             project = null;
             _inlineAnnotations.Clear();
             _inlineAnnotations.AddRange(_inlineProject.Annotations);
+            _inlineZoomFactor = 1d;
             _inlinePreviewAnnotations.Clear();
             _inlinePreviewAnnotations.AddRange(_inlineProject.Annotations);
             ClearInlineHistoryStack(_inlineUndoStack);
@@ -798,6 +800,10 @@ public partial class HistoryLibraryWindow
                 if (CopyCurrentLibraryImage())
                     WindowState = WindowState.Minimized;
             }
+            else if (e.Key == Key.V)
+            {
+                e.Handled = PasteInlineClipboardImage();
+            }
             return;
         }
 
@@ -853,11 +859,14 @@ public partial class HistoryLibraryWindow
         _inlineDraggingSelection = false;
         _inlineTextContentHit = false;
 
-        int doubleClickHit = HitTestInlineAnnotation(imagePoint);
+        int doubleClickHit = _inlineTool == ScreenshotCaptureMode.StepNumber
+            ? HitTestInlineStepNumber(imagePoint)
+            : HitTestInlineAnnotation(imagePoint);
         if (e.ClickCount >= 2 && doubleClickHit >= 0)
         {
             ClearInlinePreview();
-            if (_inlineAnnotations[doubleClickHit] is TextAnnotation)
+            if (_inlineAnnotations[doubleClickHit] is TextAnnotation doubleClickText &&
+                IsInlineTextContentHit(doubleClickText, imagePoint))
             {
                 BeginInlineTextEditing(imagePoint, doubleClickHit);
                 e.Handled = true;
@@ -903,7 +912,9 @@ public partial class HistoryLibraryWindow
             return;
         }
 
-        int hitAnnotation = HitTestInlineAnnotation(imagePoint);
+        int hitAnnotation = _inlineTool == ScreenshotCaptureMode.StepNumber
+            ? HitTestInlineStepNumber(imagePoint)
+            : HitTestInlineAnnotation(imagePoint);
         // Existing objects can be moved without abandoning the active drawing
         // tool. A click selects; a drag moves; the next empty drag draws again.
         if (hitAnnotation >= 0)
@@ -1048,10 +1059,10 @@ public partial class HistoryLibraryWindow
 
         _inlineDragCurrent = imagePoint;
         if (!_inlineDraggingSelection &&
-            _inlineTool == ScreenshotCaptureMode.Arrow &&
+            _inlineTool is ScreenshotCaptureMode.Arrow or ScreenshotCaptureMode.Line &&
             Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
-            _inlineDragCurrent = ConstrainInlineArrowPoint(_inlineDragStart, _inlineDragCurrent);
+            _inlineDragCurrent = ConstrainInlineAxisPoint(_inlineDragStart, _inlineDragCurrent);
         }
         if (_inlineTool is ScreenshotCaptureMode.Draw or ScreenshotCaptureMode.CurvedArrow)
         {
@@ -1079,10 +1090,10 @@ public partial class HistoryLibraryWindow
                 allowOutside: _inlineAllowOutsideDrag))
             _inlineDragCurrent = imagePoint;
         if (!_inlineDraggingSelection &&
-            _inlineTool == ScreenshotCaptureMode.Arrow &&
+            _inlineTool is ScreenshotCaptureMode.Arrow or ScreenshotCaptureMode.Line &&
             Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
-            _inlineDragCurrent = ConstrainInlineArrowPoint(_inlineDragStart, _inlineDragCurrent);
+            _inlineDragCurrent = ConstrainInlineAxisPoint(_inlineDragStart, _inlineDragCurrent);
         }
 
         int selectionDx = _inlineDragCurrent.X - _inlineDragStart.X;
@@ -1280,7 +1291,7 @@ public partial class HistoryLibraryWindow
         }
     }
 
-    private static DrawingPoint ConstrainInlineArrowPoint(DrawingPoint start, DrawingPoint current)
+    internal static DrawingPoint ConstrainInlineAxisPoint(DrawingPoint start, DrawingPoint current)
     {
         int dx = current.X - start.X;
         int dy = current.Y - start.Y;
@@ -1401,6 +1412,57 @@ public partial class HistoryLibraryWindow
             AppDiagnostics.LogError("library.inline-editor.duplicate-region", ex);
             ToastWindow.ShowError("Duplicate region failed", ex.Message);
         }
+    }
+
+    private bool PasteInlineClipboardImage()
+    {
+        if (_inlineProject is null)
+            return false;
+
+        try
+        {
+            if (!ClipboardService.TryGetImageFromClipboard(out var clipboardImage) || clipboardImage is null)
+            {
+                ToastWindow.Show("Nothing to paste", "Copy an image or use Crop → Copy region first");
+                return false;
+            }
+
+            using (clipboardImage)
+            {
+                CommitInlineTextEditor(save: true);
+                CommitInlineStepEditor(save: true);
+                using var fitted = FitInlineClipboardImage(clipboardImage);
+                var destination = new DrawingPoint(
+                    Math.Max(0, (_inlineProject.BaseImage.Width - fitted.Width) / 2),
+                    Math.Max(0, (_inlineProject.BaseImage.Height - fitted.Height) / 2));
+                var fragment = EditableScreenshotService.CreateImageFragment(fitted, destination);
+                SnapshotInlineUndo();
+                _inlineAnnotations.Add(fragment);
+                SelectOnlyInlineAnnotation(_inlineAnnotations.Count - 1);
+                SnapshotInlineSelectionForDrag();
+                _inlineResizeHandle = InlineResizeHandle.None;
+                SaveInlineEditor();
+                ShowInlineSelection();
+                ToastWindow.Show("Image pasted", "Drag the selected image to place it");
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.paste-image", ex);
+            ToastWindow.ShowError("Paste failed", ex.Message);
+            return false;
+        }
+    }
+
+    private Bitmap FitInlineClipboardImage(Bitmap source)
+    {
+        int maximumWidth = Math.Max(1, _inlineProject!.BaseImage.Width - 40);
+        int maximumHeight = Math.Max(1, _inlineProject.BaseImage.Height - 40);
+        double scale = Math.Min(1d, Math.Min(maximumWidth / (double)source.Width, maximumHeight / (double)source.Height));
+        int width = Math.Max(1, (int)Math.Round(source.Width * scale));
+        int height = Math.Max(1, (int)Math.Round(source.Height * scale));
+        return new Bitmap(source, new System.Drawing.Size(width, height));
     }
 
     private void ApplyInlineCutOut(DrawingRectangle selection)
@@ -2308,20 +2370,102 @@ public partial class HistoryLibraryWindow
         double scale = GetInlineDisplayScale();
         double width = _inlineProject.BaseImage.Width * scale;
         double height = _inlineProject.BaseImage.Height * scale;
-        return new Rect(
-            (EditorViewport.ActualWidth - width) / 2d,
-            (EditorViewport.ActualHeight - height) / 2d,
-            width,
-            height);
+        return new Rect(0d, 0d, width, height);
     }
 
     private double GetInlineDisplayScale()
     {
         if (_inlineProject is null)
             return 1d;
-        return Math.Min(
-            EditorViewport.ActualWidth / _inlineProject.BaseImage.Width,
-            EditorViewport.ActualHeight / _inlineProject.BaseImage.Height);
+        return CalculateInlineDisplayScale(
+            Math.Max(1d, EditorHost.ActualWidth - 24d),
+            Math.Max(1d, EditorHost.ActualHeight - 24d),
+            _inlineProject.BaseImage.Width,
+            _inlineProject.BaseImage.Height,
+            _inlineZoomFactor);
+    }
+
+    internal static double CalculateInlineDisplayScale(
+        double viewportWidth,
+        double viewportHeight,
+        int imageWidth,
+        int imageHeight,
+        double zoomFactor)
+    {
+        if (viewportWidth <= 0d || viewportHeight <= 0d || imageWidth <= 0 || imageHeight <= 0)
+            return 1d;
+        double fitScale = Math.Min(viewportWidth / imageWidth, viewportHeight / imageHeight);
+        return Math.Max(0.01d, fitScale) * Math.Clamp(zoomFactor, 0.25d, 4d);
+    }
+
+    internal static double CalculateInlineZoom(double currentZoom, int wheelDelta)
+        => Math.Clamp(
+            wheelDelta > 0 ? currentZoom * 1.15d : currentZoom / 1.15d,
+            0.25d,
+            4d);
+
+    private void EditorViewport_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (_inlineProject is null ||
+            _inlineDragging ||
+            !Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            return;
+        }
+
+        double horizontalCenter = EditorScrollViewer.ExtentWidth <= 0d
+            ? 0.5d
+            : (EditorScrollViewer.HorizontalOffset + EditorScrollViewer.ViewportWidth / 2d) / EditorScrollViewer.ExtentWidth;
+        double verticalCenter = EditorScrollViewer.ExtentHeight <= 0d
+            ? 0.5d
+            : (EditorScrollViewer.VerticalOffset + EditorScrollViewer.ViewportHeight / 2d) / EditorScrollViewer.ExtentHeight;
+        double zoom = CalculateInlineZoom(_inlineZoomFactor, e.Delta);
+        if (Math.Abs(zoom - _inlineZoomFactor) < 0.0001d)
+            return;
+        _inlineZoomFactor = zoom;
+        RefreshInlineViewportGeometry();
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            EditorScrollViewer.UpdateLayout();
+            EditorScrollViewer.ScrollToHorizontalOffset(
+                Math.Max(0d, horizontalCenter * EditorScrollViewer.ExtentWidth - EditorScrollViewer.ViewportWidth / 2d));
+            EditorScrollViewer.ScrollToVerticalOffset(
+                Math.Max(0d, verticalCenter * EditorScrollViewer.ExtentHeight - EditorScrollViewer.ViewportHeight / 2d));
+        }, DispatcherPriority.Loaded);
+        e.Handled = true;
+    }
+
+    private void RefreshInlineViewportGeometry()
+    {
+        RefreshPendingInlineAnnotations();
+        ClearInlinePreview();
+        if (InlineTextEditor.Visibility == Visibility.Visible)
+            PositionInlineTextEditor(_inlineTextPosition, _inlineTextMaxWidth, _inlineTextEditorHeight);
+        else if (InlineStepEditor.Visibility == Visibility.Visible &&
+                 _inlineEditingStepIndex >= 0 &&
+                 _inlineEditingStepIndex < _inlineAnnotations.Count &&
+                 _inlineAnnotations[_inlineEditingStepIndex] is StepNumberAnnotation step)
+            PositionInlineStepEditor(step.Pos);
+        else
+            ShowInlineSelection(clearPreview: false);
+    }
+
+    private void UpdateInlinePreviewImageSize()
+    {
+        if (_inlineProject is null)
+        {
+            EditorViewport.Width = double.NaN;
+            EditorViewport.Height = double.NaN;
+            PreviewImage.Width = double.NaN;
+            PreviewImage.Height = double.NaN;
+            return;
+        }
+
+        var rect = GetInlineDisplayRect();
+        EditorViewport.Width = Math.Max(1d, rect.Width);
+        EditorViewport.Height = Math.Max(1d, rect.Height);
+        PreviewImage.Width = Math.Max(1d, rect.Width);
+        PreviewImage.Height = Math.Max(1d, rect.Height);
     }
 
     private double ToInlineWpfFontSize(float pointSize)
@@ -2337,6 +2481,7 @@ public partial class HistoryLibraryWindow
 
     private void PositionInlineTextEditor(DrawingPoint point, int imageWidth, int imageHeight)
     {
+        var surface = GetInlineDisplayRect();
         var screen = ToInlineViewportPoint(point);
         var bottomRight = ToInlineViewportPoint(new DrawingPoint(
             point.X + Math.Max(1, imageWidth),
@@ -2344,38 +2489,31 @@ public partial class HistoryLibraryWindow
         InlineTextEditor.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
         InlineTextEditor.VerticalAlignment = System.Windows.VerticalAlignment.Top;
         InlineTextEditor.Margin = new Thickness(screen.X, screen.Y, 0, 0);
-        InlineTextEditor.Width = Math.Max(80, Math.Min(bottomRight.X - screen.X, EditorViewport.ActualWidth - screen.X - 8));
-        InlineTextEditor.Height = Math.Max(42, Math.Min(bottomRight.Y - screen.Y, EditorViewport.ActualHeight - screen.Y - 8));
+        InlineTextEditor.Width = Math.Max(80, Math.Min(bottomRight.X - screen.X, surface.Width - screen.X - 8));
+        InlineTextEditor.Height = Math.Max(42, Math.Min(bottomRight.Y - screen.Y, surface.Height - screen.Y - 8));
     }
 
     private void PositionInlineStepEditor(DrawingPoint point)
     {
+        var surface = GetInlineDisplayRect();
         var center = ToInlineViewportPoint(point);
         InlineStepEditor.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
         InlineStepEditor.VerticalAlignment = System.Windows.VerticalAlignment.Top;
         InlineStepEditor.Margin = new Thickness(
-            Math.Clamp(center.X - InlineStepEditor.Width / 2d, 0d, Math.Max(0d, EditorViewport.ActualWidth - InlineStepEditor.Width)),
-            Math.Clamp(center.Y - InlineStepEditor.Height / 2d, 0d, Math.Max(0d, EditorViewport.ActualHeight - InlineStepEditor.Height)),
+            Math.Clamp(center.X - InlineStepEditor.Width / 2d, 0d, Math.Max(0d, surface.Width - InlineStepEditor.Width)),
+            Math.Clamp(center.Y - InlineStepEditor.Height / 2d, 0d, Math.Max(0d, surface.Height - InlineStepEditor.Height)),
             0,
             0);
     }
 
     private void EditorViewport_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        RefreshPendingInlineAnnotations();
-        if (InlineTextEditor.Visibility == Visibility.Visible)
-            PositionInlineTextEditor(_inlineTextPosition, _inlineTextMaxWidth, _inlineTextEditorHeight);
-        if (InlineStepEditor.Visibility == Visibility.Visible &&
-            _inlineEditingStepIndex >= 0 &&
-            _inlineEditingStepIndex < _inlineAnnotations.Count &&
-            _inlineAnnotations[_inlineEditingStepIndex] is StepNumberAnnotation step)
-        {
-            PositionInlineStepEditor(step.Pos);
-        }
+        RefreshInlineViewportGeometry();
     }
 
     private void RefreshPendingInlineAnnotations()
     {
+        UpdateInlinePreviewImageSize();
         PendingAnnotationCanvas.Children.Clear();
         if (_inlineProject is null)
             return;
@@ -2413,7 +2551,7 @@ public partial class HistoryLibraryWindow
                     var polyline = new Polyline
                     {
                         Stroke = ToMediaBrush(curved.Color),
-                        StrokeThickness = 4,
+                        StrokeThickness = Math.Max(0.6d, 3.2d * scale),
                         StrokeLineJoin = PenLineJoin.Round,
                         StrokeStartLineCap = PenLineCap.Round,
                         StrokeEndLineCap = PenLineCap.Round
@@ -2425,7 +2563,8 @@ public partial class HistoryLibraryWindow
                         ToInlineViewportPoint(curved.Points[^2]),
                         ToInlineViewportPoint(curved.Points[^1]),
                         curved.Color,
-                        canvas);
+                        canvas,
+                        GetPathLength(curved.Points));
                     break;
                 }
             case DrawStroke draw when draw.Points.Count > 1:
@@ -2433,7 +2572,7 @@ public partial class HistoryLibraryWindow
                     var polyline = new Polyline
                     {
                         Stroke = ToMediaBrush(draw.Color),
-                        StrokeThickness = 4,
+                        StrokeThickness = Math.Max(0.6d, 6d * scale),
                         StrokeLineJoin = PenLineJoin.Round,
                         StrokeStartLineCap = PenLineCap.Round,
                         StrokeEndLineCap = PenLineCap.Round
@@ -2447,7 +2586,7 @@ public partial class HistoryLibraryWindow
                 AddPendingRect(highlight.Rect, ToMediaBrush(highlight.Color), null, 0, false, canvas);
                 break;
             case BlurRect blur:
-                AddPendingRect(blur.Rect, new SolidColorBrush(MediaColor.FromArgb(110, 156, 163, 175)), MediaBrushes.White, 1, false, canvas);
+                AddPendingRect(blur.Rect, new SolidColorBrush(MediaColor.FromArgb(110, 156, 163, 175)), MediaBrushes.White, Math.Max(0.5d, scale), false, canvas);
                 break;
             case EraserFill eraser:
                 AddPendingRect(eraser.Rect, ToMediaBrush(eraser.Color), null, 0, false, canvas);
@@ -2457,7 +2596,7 @@ public partial class HistoryLibraryWindow
                     rectangle.Rect,
                     rectangle.FillColor is { } rectFill ? ToMediaBrush(rectFill) : MediaBrushes.Transparent,
                     GetShapeStroke(rectangle.Color, rectangle.FillColor, rectangle.BorderColor),
-                    3,
+                    Math.Max(0.5d, 3d * scale),
                     false,
                     canvas);
                 break;
@@ -2466,14 +2605,14 @@ public partial class HistoryLibraryWindow
                     circle.Rect,
                     circle.FillColor is { } circleFill ? ToMediaBrush(circleFill) : MediaBrushes.Transparent,
                     GetShapeStroke(circle.Color, circle.FillColor, circle.BorderColor),
-                    3,
+                    Math.Max(0.5d, 3d * scale),
                     true,
                     canvas);
                 break;
             case StepNumberAnnotation step:
                 {
                     var center = ToInlineViewportPoint(step.Pos);
-                    const double size = 30;
+                    double size = Math.Max(2d, 28d * scale);
                     var badge = new Ellipse { Width = size, Height = size, Fill = ToMediaBrush(step.Color) };
                     Canvas.SetLeft(badge, center.X - size / 2);
                     Canvas.SetTop(badge, center.Y - size / 2);
@@ -2482,13 +2621,13 @@ public partial class HistoryLibraryWindow
                     {
                         Text = step.Number.ToString(),
                         Foreground = MediaBrushes.White,
-                        FontSize = 16,
+                        FontSize = Math.Max(1d, 14.7d * scale),
                         FontWeight = FontWeights.Bold,
                         Width = size,
                         TextAlignment = TextAlignment.Center
                     };
                     Canvas.SetLeft(label, center.X - size / 2);
-                    Canvas.SetTop(label, center.Y - 10);
+                    Canvas.SetTop(label, center.Y - size / 2d + Math.Max(0d, (size - label.FontSize * 1.25d) / 2d));
                     canvas.Children.Add(label);
                     break;
                 }
@@ -2509,7 +2648,7 @@ public partial class HistoryLibraryWindow
                         IsHitTestVisible = false
                     };
                     if (text.MaxWidth > 0)
-                        label.Width = Math.Max(40, text.MaxWidth * scale);
+                        label.Width = Math.Max(1d, text.MaxWidth * scale);
                     Canvas.SetLeft(label, pos.X);
                     Canvas.SetTop(label, pos.Y);
                     canvas.Children.Add(label);
@@ -2518,7 +2657,7 @@ public partial class HistoryLibraryWindow
             case EmojiAnnotation emoji:
                 {
                     var pos = ToInlineViewportPoint(emoji.Pos);
-                    var label = new TextBlock { Text = emoji.Emoji, FontSize = Math.Max(16, emoji.Size * scale) };
+                    var label = new TextBlock { Text = emoji.Emoji, FontSize = Math.Max(1d, emoji.Size * scale) };
                     Canvas.SetLeft(label, pos.X);
                     Canvas.SetTop(label, pos.Y);
                     canvas.Children.Add(label);
@@ -2564,6 +2703,7 @@ public partial class HistoryLibraryWindow
     {
         var start = ToInlineViewportPoint(from);
         var end = ToInlineViewportPoint(to);
+        double scale = GetInlineDisplayScale();
         canvas.Children.Add(new Line
         {
             X1 = start.X,
@@ -2571,19 +2711,20 @@ public partial class HistoryLibraryWindow
             X2 = end.X,
             Y2 = end.Y,
             Stroke = ToMediaBrush(color),
-            StrokeThickness = 2.6,
+            StrokeThickness = Math.Max(0.6d, 3.2d * scale),
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round
         });
         if (arrowHead)
-            AddPendingArrowHead(start, end, color, canvas);
+            AddPendingArrowHead(start, end, color, canvas, Distance(from, to));
     }
 
     private void AddPendingArrowHead(
         System.Windows.Point start,
         System.Windows.Point end,
         DrawingColor color,
-        Canvas canvas)
+        Canvas canvas,
+        double imageLength)
     {
         double dx = end.X - start.X;
         double dy = end.Y - start.Y;
@@ -2592,8 +2733,8 @@ public partial class HistoryLibraryWindow
             return;
         double ux = dx / length;
         double uy = dy / length;
-        const double headLength = 10;
-        const double headWidth = 5;
+        double headLength = CalculateInlineArrowheadSize(imageLength, GetInlineDisplayScale());
+        double headWidth = headLength * Math.Tan(25d * Math.PI / 180d);
         var basePoint = new System.Windows.Point(end.X - ux * headLength, end.Y - uy * headLength);
         var normal = new System.Windows.Vector(-uy * headWidth, ux * headWidth);
         canvas.Children.Add(new Polygon
@@ -2606,6 +2747,24 @@ public partial class HistoryLibraryWindow
                 basePoint - normal
             }
         });
+    }
+
+    internal static double CalculateInlineArrowheadSize(double imageLength, double displayScale)
+        => Math.Min(Math.Clamp(9d + imageLength / 20d, 9d, 21d), imageLength * 0.36d) * displayScale;
+
+    private static double Distance(DrawingPoint first, DrawingPoint second)
+    {
+        double dx = second.X - first.X;
+        double dy = second.Y - first.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    private static double GetPathLength(IReadOnlyList<DrawingPoint> points)
+    {
+        double length = 0d;
+        for (int i = 1; i < points.Count; i++)
+            length += Distance(points[i - 1], points[i]);
+        return length;
     }
 
     private void AddPendingRect(
@@ -3036,7 +3195,7 @@ public partial class HistoryLibraryWindow
 
     private int HitTestInlineAnnotation(DrawingPoint point)
     {
-        int tolerance = Math.Max(3, (int)Math.Ceiling(5d / Math.Max(0.05, GetInlineDisplayScale())));
+        int tolerance = CalculateInlineHitTolerance(GetInlineDisplayScale());
         for (int i = _inlineAnnotations.Count - 1; i >= 0; i--)
         {
             if (IsInlineAnnotationHit(_inlineAnnotations[i], point, tolerance))
@@ -3044,6 +3203,23 @@ public partial class HistoryLibraryWindow
         }
         return -1;
     }
+
+    private int HitTestInlineStepNumber(DrawingPoint point)
+    {
+        int tolerance = CalculateInlineHitTolerance(GetInlineDisplayScale());
+        for (int i = _inlineAnnotations.Count - 1; i >= 0; i--)
+        {
+            if (_inlineAnnotations[i] is StepNumberAnnotation step &&
+                Inflate(GetInlineAnnotationBounds(step), tolerance).Contains(point))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    internal static int CalculateInlineHitTolerance(double displayScale)
+        => Math.Max(3, (int)Math.Ceiling(9d / Math.Max(0.05d, displayScale)));
 
     private static bool IsInlineAnnotationHit(Annotation annotation, DrawingPoint point, int tolerance)
     {
@@ -3055,9 +3231,8 @@ public partial class HistoryLibraryWindow
             RulerAnnotation value => DistanceToSegmentSquared(point, value.From, value.To) <= toleranceSquared,
             CurvedArrowAnnotation value => IsPointNearPath(point, value.Points, toleranceSquared),
             DrawStroke value => IsPointNearPath(point, value.Points, toleranceSquared),
-            TextAnnotation value => IsInlineTextContentHit(value, point) ||
-                                    IsPointNearInlineRectangleBorder(point, GetInlineTextFrameBounds(value), tolerance),
-            ImageFragmentAnnotation value => value.Rect.Contains(point),
+            TextAnnotation value => IsInlineTextFrameHit(value, point, tolerance),
+            ImageFragmentAnnotation value => Inflate(value.Rect, tolerance).Contains(point),
             _ => Inflate(GetInlineAnnotationBounds(annotation), tolerance).Contains(point)
         };
     }
@@ -3134,6 +3309,9 @@ public partial class HistoryLibraryWindow
 
     private static bool IsInlineTextContentHit(TextAnnotation text, DrawingPoint point)
         => MeasureInlineTextContent(text).Contains(point);
+
+    internal static bool IsInlineTextFrameHit(TextAnnotation text, DrawingPoint point, int tolerance = 0)
+        => Inflate(GetInlineTextFrameBounds(text), tolerance).Contains(point);
 
     private static DrawingRectangle GetInlineTextFrameBounds(TextAnnotation text)
     {

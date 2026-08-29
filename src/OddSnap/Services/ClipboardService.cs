@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace OddSnap.Services;
 
@@ -71,6 +72,40 @@ public static class ClipboardService
         dataObject.SetData(System.Windows.Forms.DataFormats.Text, false, text);
 
         SetClipboardWithRetry(dataObject);
+    }
+
+    public static bool TryGetImageFromClipboard(out Bitmap? bitmap, int maxRetries = 3)
+    {
+        bitmap = null;
+        Exception? lastError = null;
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                if (!System.Windows.Forms.Clipboard.ContainsImage())
+                    return false;
+
+                using var image = System.Windows.Forms.Clipboard.GetImage();
+                if (image is null)
+                    return false;
+                bitmap = new Bitmap(image);
+                return true;
+            }
+            catch (ExternalException ex) when (i < maxRetries - 1)
+            {
+                lastError = ex;
+                System.Threading.Thread.Sleep(50 * (i + 1));
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                break;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Windows clipboard is busy or the copied image is unavailable. Try again in a moment.",
+            lastError);
     }
 
     private static bool ShouldIncludePngClipboardPayload(Bitmap bitmap) =>
