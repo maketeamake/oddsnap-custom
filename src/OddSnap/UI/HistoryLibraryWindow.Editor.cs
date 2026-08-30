@@ -145,7 +145,7 @@ public partial class HistoryLibraryWindow
         RegisterInlineToolButton(CircleToolButton, ScreenshotCaptureMode.CircleShape, "circleShape", 0, "Circle");
         RegisterInlineToolButton(EmojiToolButton, ScreenshotCaptureMode.Emoji, "emoji", 0, "Emoji");
         RegisterInlineToolButton(EraserToolButton, ScreenshotCaptureMode.Eraser, "eraser", 0, "Eraser");
-        RegisterInlineToolButton(FillToolButton, ScreenshotCaptureMode.Fill, "highlightBlock", 0, "Flood fill");
+        RegisterInlineToolButton(FillToolButton, ScreenshotCaptureMode.Fill, "paintBucket", 0, "Flood fill");
         RegisterInlineToolButton(CropToolButton, ScreenshotCaptureMode.CopyRegion, "rect", 0, "Copy region; original unchanged");
         ImageActionsButton.Content = CreateInlineToolIcon("redo", 0, false);
         InitializeColorMenuVisuals(ColorToolButton.ContextMenu);

@@ -10,7 +10,7 @@ and is not affiliated with or endorsed by the upstream OddSnap project.
 
 ## Current release and support
 
-The current maintained release is **OddSnap Custom 0.8.48.39**. It targets
+The current maintained release is **OddSnap Custom 0.8.48.40**. It targets
 [.NET 10 LTS](https://dotnet.microsoft.com/platform/support/policy), which is
 in active Microsoft support through November 14, 2028, and Windows 10 version
 2004 (build 19041) or newer, including Windows 11.
