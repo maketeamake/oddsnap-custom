@@ -167,6 +167,28 @@ public sealed class HistoryLibraryEditorTests
             HistoryLibraryWindow.CalculateExpandedCanvasSize(200, 120, 90, 60));
     }
 
+    [Theory]
+    [InlineData(800, 600, 100, 100, 500, 200, 800, 600)]
+    [InlineData(800, 600, 700, 100, 250, 200, 950, 600)]
+    [InlineData(800, 600, 100, 550, 300, 120, 800, 670)]
+    public void CalculateExpandedCanvasSizeForBounds_OnlyExpandsRequiredEdges(
+        int canvasWidth,
+        int canvasHeight,
+        int boundsX,
+        int boundsY,
+        int boundsWidth,
+        int boundsHeight,
+        int expectedWidth,
+        int expectedHeight)
+    {
+        Assert.Equal(
+            new Size(expectedWidth, expectedHeight),
+            HistoryLibraryWindow.CalculateExpandedCanvasSizeForBounds(
+                canvasWidth,
+                canvasHeight,
+                new Rectangle(boundsX, boundsY, boundsWidth, boundsHeight)));
+    }
+
     [Fact]
     public void FloodFillBitmap_RecolorsOnlyConnectedArea()
     {

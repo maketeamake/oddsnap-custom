@@ -822,15 +822,22 @@ public partial class HistoryLibraryWindow
 
     private void EditorViewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        bool allowOutside = SupportsInlineOutsideDrawing(_inlineTool);
-        if (_inlineProject is null ||
-            !TryGetInlineImagePoint(
-                e.GetPosition(EditorViewport),
-                out var imagePoint,
-                allowOutside: allowOutside))
+        if (_inlineProject is null)
             return;
 
-        _inlineAllowOutsideDrag = allowOutside;
+        var viewportPoint = e.GetPosition(EditorViewport);
+        bool supportsOutside = SupportsInlineOutsideDrawing(_inlineTool);
+        bool outsideTextResizeProbe =
+            !GetInlineDisplayRect().Contains(viewportPoint) &&
+            _inlineSelectedAnnotations.Count == 1 &&
+            _inlineSelectedAnnotation >= 0 &&
+            _inlineSelectedAnnotation < _inlineAnnotations.Count &&
+            _inlineAnnotations[_inlineSelectedAnnotation] is TextAnnotation;
+        bool allowOutside = supportsOutside || outsideTextResizeProbe;
+        if (!TryGetInlineImagePoint(viewportPoint, out var imagePoint, allowOutside: allowOutside))
+            return;
+
+        _inlineAllowOutsideDrag = supportsOutside;
         _inlineDraggingSelection = false;
         _inlineTextContentHit = false;
 
@@ -892,6 +899,7 @@ public partial class HistoryLibraryWindow
 
         if (TryHitInlineResizeHandle(imagePoint, out var resizeHandle))
         {
+            _inlineAllowOutsideDrag = supportsOutside || resizeHandle == InlineResizeHandle.TextRight;
             _inlineResizeHandle = resizeHandle;
             _inlineSelectionOriginal = _inlineAnnotations[_inlineSelectedAnnotation];
             SnapshotInlineSelectionForDrag();
@@ -905,6 +913,12 @@ public partial class HistoryLibraryWindow
             e.Handled = true;
             return;
         }
+
+        // A selected text frame may expose its right handle just outside the
+        // image. Other clicks in the surrounding workspace must not create an
+        // off-canvas text annotation.
+        if (outsideTextResizeProbe)
+            return;
 
         int hitAnnotation = _inlineTool == ScreenshotCaptureMode.StepNumber
             ? HitTestInlineStepNumber(imagePoint)
@@ -1234,8 +1248,7 @@ public partial class HistoryLibraryWindow
                 var resized = ResizeInlineTextWidth(text, _inlineDragCurrent);
                 if (resized.MaxWidth == text.MaxWidth)
                     return false;
-                SnapshotInlineUndo();
-                _inlineAnnotations[_inlineSelectedAnnotation] = resized;
+                CommitInlineTextResize(resized);
             }
             else
             {
@@ -1602,7 +1615,8 @@ public partial class HistoryLibraryWindow
         Bitmap transformedBase,
         List<Annotation> annotations,
         bool save,
-        double? preservedDisplayScale = null)
+        double? preservedDisplayScale = null,
+        bool clearSelection = true)
     {
         if (_inlineProject is null || string.IsNullOrWhiteSpace(_inlineProjectPath))
             return;
@@ -1624,7 +1638,8 @@ public partial class HistoryLibraryWindow
         _inlineAnnotations.Clear();
         _inlineAnnotations.AddRange(annotations);
         _inlinePreviewAnnotations.Clear();
-        ClearInlineSelectionState();
+        if (clearSelection)
+            ClearInlineSelectionState();
         UpdateInlineToolButtons();
         PreviewImage.Source = BitmapToBitmapSource(transformedBase);
         PreviewEmptyText.Visibility = Visibility.Collapsed;
@@ -3658,12 +3673,69 @@ public partial class HistoryLibraryWindow
 
     private TextAnnotation ResizeInlineTextWidth(TextAnnotation text, DrawingPoint draggedPoint)
     {
-        int maximumWidth = _inlineProject is null
-            ? int.MaxValue
-            : Math.Max(40, _inlineProject.BaseImage.Width - text.Pos.X);
-        int width = CalculateInlineTextMaxWidthFromHandle(text.Pos.X, draggedPoint.X, maximumWidth);
+        int width = CalculateInlineTextMaxWidthFromHandle(text.Pos.X, draggedPoint.X, int.MaxValue);
         return text with { MaxWidth = width };
     }
+
+    private void CommitInlineTextResize(TextAnnotation resized)
+    {
+        if (_inlineProject is null ||
+            _inlineSelectedAnnotation < 0 ||
+            _inlineSelectedAnnotation >= _inlineAnnotations.Count)
+        {
+            return;
+        }
+
+        var frame = GetInlineTextFrameBounds(resized);
+        var expandedSize = CalculateExpandedCanvasSizeForBounds(
+            _inlineProject.BaseImage.Width,
+            _inlineProject.BaseImage.Height,
+            frame);
+        if (expandedSize.Width == _inlineProject.BaseImage.Width &&
+            expandedSize.Height == _inlineProject.BaseImage.Height)
+        {
+            SnapshotInlineUndo();
+            _inlineAnnotations[_inlineSelectedAnnotation] = resized;
+            return;
+        }
+
+        Bitmap? expanded = null;
+        try
+        {
+            double preservedDisplayScale = GetInlineDisplayScale();
+            var viewportCenter = CaptureInlineViewportCenter();
+            expanded = new Bitmap(expandedSize.Width, expandedSize.Height, DrawingPixelFormat.Format32bppArgb);
+            using (var graphics = Graphics.FromImage(expanded))
+            {
+                graphics.Clear(DrawingColor.White);
+                graphics.DrawImageUnscaled(_inlineProject.BaseImage, 0, 0);
+            }
+
+            var annotations = _inlineAnnotations.ToList();
+            annotations[_inlineSelectedAnnotation] = resized;
+            SnapshotInlineUndo(includeBaseImage: true);
+            ReplaceInlineBaseTransform(
+                expanded,
+                annotations,
+                save: false,
+                preservedDisplayScale: preservedDisplayScale,
+                clearSelection: false);
+            expanded = null;
+            RestoreInlineViewportCenter(viewportCenter.Horizontal, viewportCenter.Vertical);
+        }
+        finally
+        {
+            expanded?.Dispose();
+        }
+    }
+
+    internal static System.Drawing.Size CalculateExpandedCanvasSizeForBounds(
+        int canvasWidth,
+        int canvasHeight,
+        DrawingRectangle bounds)
+        => new(
+            Math.Max(canvasWidth, Math.Max(1, bounds.Right)),
+            Math.Max(canvasHeight, Math.Max(1, bounds.Bottom)));
 
     internal static int CalculateInlineTextMaxWidthFromHandle(int textX, int handleX, int maximumWidth)
         => Math.Clamp(
