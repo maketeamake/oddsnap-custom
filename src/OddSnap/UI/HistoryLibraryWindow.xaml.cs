@@ -538,12 +538,7 @@ public partial class HistoryLibraryWindow : Window
 
     private void SelectTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Select);
     private void ArrowTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Arrow);
-    private void CropTool_Click(object sender, RoutedEventArgs e)
-    {
-        _inlineCropMode = InlineCropMode.KeepSelection;
-        SetInlineEditorTool(ScreenshotCaptureMode.Crop);
-    }
-    private void CopyRegionTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.CopyRegion);
+    private void CropTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.CopyRegion);
     private void TextTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Text);
     private void HighlightTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Highlight);
     private void BlurTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Blur);
@@ -556,8 +551,6 @@ public partial class HistoryLibraryWindow : Window
     private void CircleTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.CircleShape);
     private void EraserTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Eraser);
     private void FillTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Fill);
-    private void CanvasResizeTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.CanvasResize);
-
     private void EditTags_Click(object sender, RoutedEventArgs e)
     {
         if (FilmstripList.SelectedItem is not LibraryImageItem item ||

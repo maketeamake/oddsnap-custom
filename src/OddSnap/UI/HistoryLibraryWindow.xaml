@@ -222,11 +222,7 @@
                 <Button x:Name="EraserToolButton" Style="{StaticResource LibraryToolButton}" Click="EraserTool_Click" ToolTip="Erase an area"/>
                 <Button x:Name="FillToolButton" Style="{StaticResource LibraryToolButton}" Click="FillTool_Click" ToolTip="Flood fill an area"/>
                 <Button x:Name="CropToolButton" Style="{StaticResource LibraryToolButton}" Margin="3,0,0,0"
-                        Click="CropTool_Click" ToolTip="Crop image to selection"/>
-                <Button x:Name="CopyRegionToolButton" Style="{StaticResource LibraryToolButton}"
-                        Click="CopyRegionTool_Click" ToolTip="Copy a selected region to the clipboard"/>
-                <Button x:Name="CanvasResizeToolButton" Style="{StaticResource LibraryToolButton}"
-                        Click="CanvasResizeTool_Click" ToolTip="Resize canvas by dragging its border"/>
+                        Click="CropTool_Click" ToolTip="Copy a selected region; keep the original image unchanged"/>
                 <Button x:Name="ImageActionsButton" Style="{StaticResource LibraryToolButton}"
                         Click="ImageActionsButton_Click" ToolTip="Rotate, flip, resize, and flatten image">
                     <Button.ContextMenu>

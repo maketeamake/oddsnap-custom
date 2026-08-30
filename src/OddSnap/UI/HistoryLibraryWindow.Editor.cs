@@ -110,6 +110,10 @@ public partial class HistoryLibraryWindow
         BottomLeft,
         BottomRight,
         TextRight,
+        CanvasLeft,
+        CanvasTop,
+        CanvasRight,
+        CanvasBottom,
         CanvasTopLeft,
         CanvasTopRight,
         CanvasBottomLeft,
@@ -142,9 +146,7 @@ public partial class HistoryLibraryWindow
         RegisterInlineToolButton(EmojiToolButton, ScreenshotCaptureMode.Emoji, "emoji", 0, "Emoji");
         RegisterInlineToolButton(EraserToolButton, ScreenshotCaptureMode.Eraser, "eraser", 0, "Eraser");
         RegisterInlineToolButton(FillToolButton, ScreenshotCaptureMode.Fill, "highlightBlock", 0, "Flood fill");
-        RegisterInlineToolButton(CropToolButton, ScreenshotCaptureMode.Crop, "rect", 0, "Crop image");
-        RegisterInlineToolButton(CopyRegionToolButton, ScreenshotCaptureMode.CopyRegion, "copy", 0, "Copy region to clipboard");
-        RegisterInlineToolButton(CanvasResizeToolButton, ScreenshotCaptureMode.CanvasResize, "fullscreen", 0, "Resize canvas by dragging its border");
+        RegisterInlineToolButton(CropToolButton, ScreenshotCaptureMode.CopyRegion, "rect", 0, "Copy region; original unchanged");
         ImageActionsButton.Content = CreateInlineToolIcon("redo", 0, false);
         InitializeColorMenuVisuals(ColorToolButton.ContextMenu);
         InitializeColorMenuVisuals(ArrowPresetButton.ContextMenu);
@@ -274,8 +276,6 @@ public partial class HistoryLibraryWindow
         _inlineResizeHandle = InlineResizeHandle.None;
         ClearInlinePreview();
         UpdateInlineToolButtons();
-        if (mode == ScreenshotCaptureMode.CanvasResize)
-            ShowInlineCanvasResizeFrame();
         EditorViewport.Cursor = mode == ScreenshotCaptureMode.Text ? WpfCursors.IBeam : WpfCursors.Cross;
     }
 
@@ -355,6 +355,11 @@ public partial class HistoryLibraryWindow
 
     private void CommitInlineSelectionDragPreview()
     {
+        if (_inlineSelectionPreviousPreview is null &&
+            _inlineSelectionPreviousPreviewAnnotations is null)
+        {
+            return;
+        }
         _inlineSelectionPreviousPreview = null;
         _inlineSelectionPreviousPreviewAnnotations = null;
         _inlinePreviewAnnotations.Clear();
@@ -833,13 +838,27 @@ public partial class HistoryLibraryWindow
             _inlineSelectedAnnotation >= 0 &&
             _inlineSelectedAnnotation < _inlineAnnotations.Count &&
             _inlineAnnotations[_inlineSelectedAnnotation] is TextAnnotation;
-        bool allowOutside = supportsOutside || outsideTextResizeProbe;
+        bool canvasBorderProbe = IsNearInlineCanvasBorder(viewportPoint);
+        bool allowOutside = supportsOutside || outsideTextResizeProbe || canvasBorderProbe;
         if (!TryGetInlineImagePoint(viewportPoint, out var imagePoint, allowOutside: allowOutside))
             return;
 
         _inlineAllowOutsideDrag = supportsOutside;
         _inlineDraggingSelection = false;
         _inlineTextContentHit = false;
+
+        if (canvasBorderProbe && TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
+        {
+            _inlineAllowOutsideDrag = true;
+            _inlineResizeHandle = canvasHandle;
+            _inlineDragStart = imagePoint;
+            _inlineDragCurrent = imagePoint;
+            _inlineDragging = true;
+            EditorViewport.Cursor = GetInlineResizeCursor(canvasHandle);
+            EditorViewport.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
 
         int doubleClickHit = _inlineTool == ScreenshotCaptureMode.StepNumber
             ? HitTestInlineStepNumber(imagePoint)
@@ -881,18 +900,6 @@ public partial class HistoryLibraryWindow
         if (_inlineTool == ScreenshotCaptureMode.Fill)
         {
             ApplyInlineFloodFill(imagePoint);
-            e.Handled = true;
-            return;
-        }
-
-        if (_inlineTool == ScreenshotCaptureMode.CanvasResize && TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
-        {
-            _inlineResizeHandle = canvasHandle;
-            _inlineDragStart = imagePoint;
-            _inlineDragCurrent = imagePoint;
-            _inlineDragging = true;
-            _inlineDraggingSelection = false;
-            EditorViewport.CaptureMouse();
             e.Handled = true;
             return;
         }
@@ -960,6 +967,8 @@ public partial class HistoryLibraryWindow
                 _inlineSelectionOriginal = _inlineAnnotations[hitAnnotation];
             }
             SnapshotInlineSelectionForDrag();
+            if (_inlineAnnotations[hitAnnotation] is TextAnnotation)
+                _inlineAllowOutsideDrag = true;
             _inlineResizeHandle = InlineResizeHandle.None;
             _inlineDragStart = imagePoint;
             _inlineDragCurrent = imagePoint;
@@ -1080,18 +1089,21 @@ public partial class HistoryLibraryWindow
 
     private void EditorViewport_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_inlineProject is null ||
-            !TryGetInlineImagePoint(
-                e.GetPosition(EditorViewport),
+        if (_inlineProject is null)
+            return;
+
+        var viewportPoint = e.GetPosition(EditorViewport);
+        bool canvasBorderProbe = !_inlineDragging && IsNearInlineCanvasBorder(viewportPoint);
+        if (!TryGetInlineImagePoint(
+                viewportPoint,
                 out var imagePoint,
                 clamp: _inlineDragging && !_inlineAllowOutsideDrag,
-                allowOutside: _inlineAllowOutsideDrag))
+                allowOutside: _inlineAllowOutsideDrag || canvasBorderProbe))
             return;
 
         if (!_inlineDragging)
         {
-            if (_inlineTool == ScreenshotCaptureMode.CanvasResize &&
-                TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
+            if (canvasBorderProbe && TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
             {
                 EditorViewport.Cursor = GetInlineResizeCursor(canvasHandle);
             }
@@ -1200,7 +1212,7 @@ public partial class HistoryLibraryWindow
             return;
         }
 
-        if (_inlineTool == ScreenshotCaptureMode.CanvasResize && !_inlineDraggingSelection)
+        if (IsInlineCanvasResizeHandle(_inlineResizeHandle) && !_inlineDraggingSelection)
         {
             var handle = _inlineResizeHandle;
             _inlineAllowOutsideDrag = false;
@@ -1287,6 +1299,17 @@ public partial class HistoryLibraryWindow
                 if (resized.MaxWidth == text.MaxWidth)
                     return false;
                 CommitInlineTextResize(resized);
+            }
+            else if (_inlineSelectedAnnotations.Count == 1 &&
+                     _inlineSelectionOriginal is TextAnnotation movedText)
+            {
+                var bounds = GetInlineTextFrameBounds(movedText);
+                dx = Math.Max(dx, -bounds.Left);
+                dy = Math.Max(dy, -bounds.Top);
+                var translated = (TextAnnotation)EditableScreenshotService.Translate(movedText, dx, dy);
+                if (Equals(translated, movedText))
+                    return false;
+                CommitInlineTextResize(translated);
             }
             else
             {
@@ -1796,14 +1819,13 @@ public partial class HistoryLibraryWindow
         if (_inlineProject is null || handle is InlineResizeHandle.None)
             return;
 
-        int left = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomLeft ? point.X : 0;
-        int top = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasTopRight ? point.Y : 0;
-        int right = handle is InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomRight ? point.X : _inlineProject.BaseImage.Width;
-        int bottom = handle is InlineResizeHandle.CanvasBottomLeft or InlineResizeHandle.CanvasBottomRight ? point.Y : _inlineProject.BaseImage.Height;
+        int left = handle is InlineResizeHandle.CanvasLeft or InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomLeft ? point.X : 0;
+        int top = handle is InlineResizeHandle.CanvasTop or InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasTopRight ? point.Y : 0;
+        int right = handle is InlineResizeHandle.CanvasRight or InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomRight ? point.X : _inlineProject.BaseImage.Width;
+        int bottom = handle is InlineResizeHandle.CanvasBottom or InlineResizeHandle.CanvasBottomLeft or InlineResizeHandle.CanvasBottomRight ? point.Y : _inlineProject.BaseImage.Height;
         if (right - left < 10 || bottom - top < 10 ||
             (left == 0 && top == 0 && right == _inlineProject.BaseImage.Width && bottom == _inlineProject.BaseImage.Height))
         {
-            ShowInlineCanvasResizeFrame();
             return;
         }
 
@@ -1826,7 +1848,6 @@ public partial class HistoryLibraryWindow
             CommitInlineBaseTransform(resizedCanvas, annotations, preservedDisplayScale);
             resizedCanvas = null;
             RestoreInlineViewportCenter(viewportCenter.Horizontal, viewportCenter.Vertical);
-            ShowInlineCanvasResizeFrame();
         }
         catch (Exception ex)
         {
@@ -2904,8 +2925,6 @@ public partial class HistoryLibraryWindow
         else
         {
             ShowInlineSelection(clearPreview: false);
-            if (_inlineTool == ScreenshotCaptureMode.CanvasResize)
-                ShowInlineCanvasResizeFrame(clearPreview: false);
         }
     }
 
@@ -3316,7 +3335,7 @@ public partial class HistoryLibraryWindow
         var from = ToInlineViewportPoint(previewStart);
         var to = ToInlineViewportPoint(previewEnd);
         var brush = new SolidColorBrush(MediaColor.FromArgb(_inlineColor.A, _inlineColor.R, _inlineColor.G, _inlineColor.B));
-        if (_inlineTool == ScreenshotCaptureMode.CanvasResize)
+        if (IsInlineCanvasResizeHandle(_inlineResizeHandle))
         {
             ShowInlineCanvasResizePreview(_inlineResizeHandle, _inlineDragCurrent);
             return;
@@ -3658,10 +3677,10 @@ public partial class HistoryLibraryWindow
     {
         if (_inlineProject is null)
             return;
-        int left = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomLeft ? point.X : 0;
-        int top = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasTopRight ? point.Y : 0;
-        int right = handle is InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomRight ? point.X : _inlineProject.BaseImage.Width;
-        int bottom = handle is InlineResizeHandle.CanvasBottomLeft or InlineResizeHandle.CanvasBottomRight ? point.Y : _inlineProject.BaseImage.Height;
+        int left = handle is InlineResizeHandle.CanvasLeft or InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomLeft ? point.X : 0;
+        int top = handle is InlineResizeHandle.CanvasTop or InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasTopRight ? point.Y : 0;
+        int right = handle is InlineResizeHandle.CanvasRight or InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomRight ? point.X : _inlineProject.BaseImage.Width;
+        int bottom = handle is InlineResizeHandle.CanvasBottom or InlineResizeHandle.CanvasBottomLeft or InlineResizeHandle.CanvasBottomRight ? point.Y : _inlineProject.BaseImage.Height;
         var topLeft = ToInlineViewportPoint(new DrawingPoint(left, top));
         var bottomRight = ToInlineViewportPoint(new DrawingPoint(right, bottom));
         var preview = new System.Windows.Shapes.Rectangle
@@ -3681,27 +3700,52 @@ public partial class HistoryLibraryWindow
     private bool TryHitInlineCanvasHandle(DrawingPoint point, out InlineResizeHandle handle)
     {
         handle = InlineResizeHandle.None;
-        if (_inlineProject is null || _inlineTool != ScreenshotCaptureMode.CanvasResize)
+        if (_inlineProject is null)
             return false;
         int tolerance = Math.Max(6, (int)Math.Ceiling(9d / Math.Max(0.05d, GetInlineDisplayScale())));
-        var corners = new (InlineResizeHandle Handle, DrawingPoint Point)[]
+        int width = _inlineProject.BaseImage.Width;
+        int height = _inlineProject.BaseImage.Height;
+        bool nearLeft = Math.Abs(point.X) <= tolerance;
+        bool nearRight = Math.Abs(point.X - width) <= tolerance;
+        bool nearTop = Math.Abs(point.Y) <= tolerance;
+        bool nearBottom = Math.Abs(point.Y - height) <= tolerance;
+        bool withinX = point.X >= -tolerance && point.X <= width + tolerance;
+        bool withinY = point.Y >= -tolerance && point.Y <= height + tolerance;
+
+        handle = (nearLeft, nearTop, nearRight, nearBottom) switch
         {
-            (InlineResizeHandle.CanvasTopLeft, new DrawingPoint(0, 0)),
-            (InlineResizeHandle.CanvasTopRight, new DrawingPoint(_inlineProject.BaseImage.Width, 0)),
-            (InlineResizeHandle.CanvasBottomLeft, new DrawingPoint(0, _inlineProject.BaseImage.Height)),
-            (InlineResizeHandle.CanvasBottomRight, new DrawingPoint(_inlineProject.BaseImage.Width, _inlineProject.BaseImage.Height))
+            (true, true, _, _) => InlineResizeHandle.CanvasTopLeft,
+            (_, true, true, _) => InlineResizeHandle.CanvasTopRight,
+            (true, _, _, true) => InlineResizeHandle.CanvasBottomLeft,
+            (_, _, true, true) => InlineResizeHandle.CanvasBottomRight,
+            (true, _, _, _) when withinY => InlineResizeHandle.CanvasLeft,
+            (_, true, _, _) when withinX => InlineResizeHandle.CanvasTop,
+            (_, _, true, _) when withinY => InlineResizeHandle.CanvasRight,
+            (_, _, _, true) when withinX => InlineResizeHandle.CanvasBottom,
+            _ => InlineResizeHandle.None
         };
-        foreach (var candidate in corners)
-        {
-            if (Math.Abs(point.X - candidate.Point.X) <= tolerance &&
-                Math.Abs(point.Y - candidate.Point.Y) <= tolerance)
-            {
-                handle = candidate.Handle;
-                return true;
-            }
-        }
-        return false;
+        return handle != InlineResizeHandle.None;
     }
+
+    private bool IsNearInlineCanvasBorder(System.Windows.Point point)
+    {
+        var rect = GetInlineDisplayRect();
+        const double tolerance = 10d;
+        bool withinX = point.X >= rect.Left - tolerance && point.X <= rect.Right + tolerance;
+        bool withinY = point.Y >= rect.Top - tolerance && point.Y <= rect.Bottom + tolerance;
+        return (withinY && (Math.Abs(point.X - rect.Left) <= tolerance || Math.Abs(point.X - rect.Right) <= tolerance)) ||
+               (withinX && (Math.Abs(point.Y - rect.Top) <= tolerance || Math.Abs(point.Y - rect.Bottom) <= tolerance));
+    }
+
+    private static bool IsInlineCanvasResizeHandle(InlineResizeHandle handle)
+        => handle is InlineResizeHandle.CanvasLeft or
+                     InlineResizeHandle.CanvasTop or
+                     InlineResizeHandle.CanvasRight or
+                     InlineResizeHandle.CanvasBottom or
+                     InlineResizeHandle.CanvasTopLeft or
+                     InlineResizeHandle.CanvasTopRight or
+                     InlineResizeHandle.CanvasBottomLeft or
+                     InlineResizeHandle.CanvasBottomRight;
 
     private bool TryHitInlineResizeHandle(DrawingPoint point, out InlineResizeHandle handle)
     {
@@ -3760,6 +3804,8 @@ public partial class HistoryLibraryWindow
         InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomRight => WpfCursors.SizeNWSE,
         InlineResizeHandle.TopRight or InlineResizeHandle.BottomLeft or
         InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomLeft => WpfCursors.SizeNESW,
+        InlineResizeHandle.CanvasLeft or InlineResizeHandle.CanvasRight => WpfCursors.SizeWE,
+        InlineResizeHandle.CanvasTop or InlineResizeHandle.CanvasBottom => WpfCursors.SizeNS,
         InlineResizeHandle.TextRight => WpfCursors.SizeWE,
         _ => WpfCursors.SizeAll
     };
