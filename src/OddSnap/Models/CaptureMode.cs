@@ -28,5 +28,6 @@ public enum CaptureMode
     Center = 22,
     Crop = 23,
     Fill = 24,
-    CanvasResize = 25
+    CanvasResize = 25,
+    CopyRegion = 26
 }

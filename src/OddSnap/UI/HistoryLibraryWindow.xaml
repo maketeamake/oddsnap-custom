@@ -142,10 +142,6 @@
                                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,0"/>
                     </Grid>
                 </Button>
-                <Button x:Name="CopyToolButton" Style="{StaticResource LibraryToolButton}"
-                        Click="CopyTool_Click" ToolTip="Copy image">
-                    <Image Width="21" Height="21" Source="{x:Null}"/>
-                </Button>
                 <Button x:Name="SelectToolButton" Style="{StaticResource LibraryToolButton}" Click="SelectTool_Click" ToolTip="Select and move annotations"/>
                 <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
                     <Button x:Name="ArrowToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="ArrowTool_Click" ToolTip="Draw an arrow"/>
@@ -225,25 +221,14 @@
                 </Button>
                 <Button x:Name="EraserToolButton" Style="{StaticResource LibraryToolButton}" Click="EraserTool_Click" ToolTip="Erase an area"/>
                 <Button x:Name="FillToolButton" Style="{StaticResource LibraryToolButton}" Click="FillTool_Click" ToolTip="Flood fill an area"/>
-                <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
-                    <Button x:Name="CropToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="CropTool_Click" ToolTip="Crop to selection"/>
-                    <Button x:Name="CropPresetButton" Style="{StaticResource LibraryPresetButton}" Click="CropPresetButton_Click" Content="▾" ToolTip="Crop modes">
-                        <Button.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem Header="Crop to selection" Tag="crop" Click="CropModePreset_Click"/>
-                                <MenuItem Header="Cut out horizontal/vertical band" Tag="cutout" Click="CropModePreset_Click"/>
-                                <Separator/>
-                                <MenuItem Header="Copy region (keep image unchanged)" Tag="copy" Click="CropModePreset_Click"/>
-                                <MenuItem Header="Duplicate region as movable object" Tag="duplicate" Click="CropModePreset_Click"/>
-                            </ContextMenu>
-                        </Button.ContextMenu>
-                    </Button>
-                </StackPanel>
+                <Button x:Name="CropToolButton" Style="{StaticResource LibraryToolButton}" Margin="3,0,0,0"
+                        Click="CropTool_Click" ToolTip="Crop image to selection"/>
+                <Button x:Name="CopyRegionToolButton" Style="{StaticResource LibraryToolButton}"
+                        Click="CopyRegionTool_Click" ToolTip="Copy a selected region to the clipboard"/>
                 <Button x:Name="CanvasResizeToolButton" Style="{StaticResource LibraryToolButton}"
                         Click="CanvasResizeTool_Click" ToolTip="Resize canvas by dragging its border"/>
                 <Button x:Name="ImageActionsButton" Style="{StaticResource LibraryToolButton}"
                         Click="ImageActionsButton_Click" ToolTip="Rotate, flip, resize, and flatten image">
-                    <TextBlock Text="Image" FontSize="10" FontWeight="SemiBold"/>
                     <Button.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="Rotate 90° clockwise" Tag="rotate90" Click="ImageAction_Click"/>
@@ -279,24 +264,6 @@
                                 <MenuItem Header="60%" Tag="60" IsCheckable="True" Click="HighlightOpacityPreset_Click"/>
                                 <MenuItem Header="80%" Tag="80" IsCheckable="True" Click="HighlightOpacityPreset_Click"/>
                             </MenuItem>
-                        </ContextMenu>
-                    </Button.ContextMenu>
-                </Button>
-                <Button x:Name="ShapeBorderToolButton" Style="{StaticResource LibraryToolButton}" Click="ShapeBorderTool_Click" ToolTip="Rectangle and circle border">
-                    <Rectangle x:Name="ShapeBorderSwatch" Width="16" Height="16" Fill="Transparent"
-                               Stroke="#FF111827" StrokeThickness="1.5" StrokeDashArray="2,2"/>
-                    <Button.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="No border" Tag="none" IsCheckable="True" IsChecked="True" Click="ShapeBorderPreset_Click"/>
-                            <Separator/>
-                            <MenuItem Header="●  Red" Tag="#FFFF3B30" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  Yellow" Tag="#FFFFCC00" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  Green" Tag="#FF34C759" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  Blue" Tag="#FF007AFF" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  Orange" Tag="#FFFF9500" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  Gray" Tag="#FF8E8E93" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  Black" Tag="#FF111111" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
-                            <MenuItem Header="●  White" Tag="#FFFFFFFF" IsCheckable="True" Click="ShapeBorderPreset_Click"/>
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>

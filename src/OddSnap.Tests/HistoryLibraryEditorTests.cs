@@ -54,7 +54,7 @@ public sealed class HistoryLibraryEditorTests
         Assert.True(HistoryLibraryWindow.CalculateInlineZoom(1d, 120) > 1d);
         Assert.True(HistoryLibraryWindow.CalculateInlineZoom(1d, -120) < 1d);
         Assert.Equal(4d, HistoryLibraryWindow.CalculateInlineZoom(4d, 120));
-        Assert.Equal(0.25d, HistoryLibraryWindow.CalculateInlineZoom(0.25d, -120));
+        Assert.Equal(0.05d, HistoryLibraryWindow.CalculateInlineZoom(0.05d, -120));
     }
 
     [Theory]
@@ -78,6 +78,37 @@ public sealed class HistoryLibraryEditorTests
             zoomFactor);
 
         Assert.Equal(expected, scale, 6);
+    }
+
+    [Theory]
+    [InlineData(1000, 500, 500, 250, 1, 0.5)]
+    [InlineData(1000, 500, 2000, 1000, 1, 2)]
+    [InlineData(1000, 500, 100, 50, 1, 0.1)]
+    public void CalculateInlineZoomForDisplayScale_PreservesAbsoluteImageScale(
+        double viewportWidth,
+        double viewportHeight,
+        int imageWidth,
+        int imageHeight,
+        double desiredDisplayScale,
+        double expectedZoom)
+    {
+        double zoom = HistoryLibraryWindow.CalculateInlineZoomForDisplayScale(
+            viewportWidth,
+            viewportHeight,
+            imageWidth,
+            imageHeight,
+            desiredDisplayScale);
+
+        Assert.Equal(expectedZoom, zoom, 6);
+        Assert.Equal(
+            desiredDisplayScale,
+            HistoryLibraryWindow.CalculateInlineDisplayScale(
+                viewportWidth,
+                viewportHeight,
+                imageWidth,
+                imageHeight,
+                zoom),
+            6);
     }
 
     [Theory]

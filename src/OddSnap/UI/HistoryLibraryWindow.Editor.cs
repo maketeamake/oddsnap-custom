@@ -59,7 +59,6 @@ public partial class HistoryLibraryWindow
         [ScreenshotCaptureMode.Fill] = DefaultInlineDrawingColor
     };
     private InlineCropMode _inlineCropMode = InlineCropMode.KeepSelection;
-    private DrawingColor? _inlineShapeBorderColor;
     private int _inlineHighlightOpacityPercent = 20;
     private DrawingPoint _inlineDragStart;
     private DrawingPoint _inlineDragCurrent;
@@ -144,10 +143,10 @@ public partial class HistoryLibraryWindow
         RegisterInlineToolButton(EraserToolButton, ScreenshotCaptureMode.Eraser, "eraser", 0, "Eraser");
         RegisterInlineToolButton(FillToolButton, ScreenshotCaptureMode.Fill, "highlightBlock", 0, "Flood fill");
         RegisterInlineToolButton(CropToolButton, ScreenshotCaptureMode.Crop, "rect", 0, "Crop image");
+        RegisterInlineToolButton(CopyRegionToolButton, ScreenshotCaptureMode.CopyRegion, "copy", 0, "Copy region to clipboard");
         RegisterInlineToolButton(CanvasResizeToolButton, ScreenshotCaptureMode.CanvasResize, "fullscreen", 0, "Resize canvas by dragging its border");
-        CopyToolButton.Content = CreateInlineToolIcon("copy", 0, false);
+        ImageActionsButton.Content = CreateInlineToolIcon("redo", 0, false);
         InitializeColorMenuVisuals(ColorToolButton.ContextMenu);
-        InitializeColorMenuVisuals(ShapeBorderToolButton.ContextMenu);
         InitializeColorMenuVisuals(ArrowPresetButton.ContextMenu);
         InitializeColorMenuVisuals(DrawPresetButton.ContextMenu);
         InitializeColorMenuVisuals(HighlightPresetButton.ContextMenu);
@@ -399,29 +398,6 @@ public partial class HistoryLibraryWindow
     private void HighlightPresetButton_Click(object sender, RoutedEventArgs e) => OpenInlinePresetMenu(HighlightPresetButton);
 
     private void TextPresetButton_Click(object sender, RoutedEventArgs e) => OpenInlinePresetMenu(TextPresetButton);
-
-    private void CropPresetButton_Click(object sender, RoutedEventArgs e) => OpenInlinePresetMenu(CropPresetButton);
-
-    private void CropModePreset_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string value })
-            return;
-        _inlineCropMode = value.ToLowerInvariant() switch
-        {
-            "cutout" => InlineCropMode.CutOutBand,
-            "copy" => InlineCropMode.CopySelection,
-            "duplicate" => InlineCropMode.DuplicateSelection,
-            _ => InlineCropMode.KeepSelection
-        };
-        CropToolButton.ToolTip = _inlineCropMode switch
-        {
-            InlineCropMode.CutOutBand => "Cut out a horizontal or vertical band",
-            InlineCropMode.CopySelection => "Copy a region without changing the image",
-            InlineCropMode.DuplicateSelection => "Duplicate a region and move it on the image",
-            _ => "Crop to selection"
-        };
-        SetInlineEditorTool(ScreenshotCaptureMode.Crop);
-    }
 
     private void ArrowColorPreset_Click(object sender, RoutedEventArgs e)
         => ApplyInlineToolColorPreset(sender, ScreenshotCaptureMode.Arrow);
@@ -737,40 +713,6 @@ public partial class HistoryLibraryWindow
         SaveInlineEditor();
     }
 
-    private void ShapeBorderTool_Click(object sender, RoutedEventArgs e)
-    {
-        if (ShapeBorderToolButton.ContextMenu is { } menu)
-        {
-            menu.PlacementTarget = ShapeBorderToolButton;
-            menu.IsOpen = true;
-        }
-    }
-
-    private void ShapeBorderPreset_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string value } selected ||
-            ShapeBorderToolButton.ContextMenu is not { } menu)
-        {
-            return;
-        }
-
-        foreach (var sibling in menu.Items.OfType<MenuItem>())
-            sibling.IsChecked = ReferenceEquals(sibling, selected);
-
-        if (string.Equals(value, "none", StringComparison.OrdinalIgnoreCase))
-        {
-            _inlineShapeBorderColor = null;
-            ShapeBorderSwatch.Stroke = new SolidColorBrush(MediaColor.FromRgb(17, 24, 39));
-            ShapeBorderSwatch.StrokeDashArray = [2, 2];
-            return;
-        }
-
-        var media = (MediaColor)System.Windows.Media.ColorConverter.ConvertFromString(value);
-        _inlineShapeBorderColor = DrawingColor.FromArgb(media.A, media.R, media.G, media.B);
-        ShapeBorderSwatch.Stroke = new SolidColorBrush(media);
-        ShapeBorderSwatch.StrokeDashArray = null;
-    }
-
     private void EmojiTool_Click(object sender, RoutedEventArgs e)
     {
         SetInlineEditorTool(ScreenshotCaptureMode.Emoji);
@@ -917,7 +859,7 @@ public partial class HistoryLibraryWindow
                                   HitTestInlineAnnotation(imagePoint) is var fragmentIndex &&
                                   fragmentIndex >= 0 &&
                                   _inlineAnnotations[fragmentIndex] is ImageFragmentAnnotation;
-        if (_inlineTool == ScreenshotCaptureMode.Crop && !movableFragmentHit)
+        if (_inlineTool is ScreenshotCaptureMode.Crop or ScreenshotCaptureMode.CopyRegion && !movableFragmentHit)
         {
             ClearInlineSelectionState();
             _inlineResizeHandle = InlineResizeHandle.None;
@@ -1192,13 +1134,16 @@ public partial class HistoryLibraryWindow
             return;
         }
 
-        if (_inlineTool == ScreenshotCaptureMode.Crop && !_inlineDraggingSelection)
+        if (_inlineTool is ScreenshotCaptureMode.Crop or ScreenshotCaptureMode.CopyRegion && !_inlineDraggingSelection)
         {
             var cropRect = NormalizeInlineRect(_inlineDragStart, _inlineDragCurrent);
             _inlineAllowOutsideDrag = false;
             _inlineResizeHandle = InlineResizeHandle.None;
             ClearInlinePreview();
-            ApplyInlineCrop(cropRect);
+            if (_inlineTool == ScreenshotCaptureMode.CopyRegion)
+                CopyInlineSelection(cropRect);
+            else
+                ApplyInlineCrop(cropRect);
             e.Handled = true;
             return;
         }
@@ -1262,6 +1207,16 @@ public partial class HistoryLibraryWindow
             if (dx == 0 && dy == 0)
                 return false;
             if (_inlineResizeHandle != InlineResizeHandle.None &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is ImageFragmentAnnotation fragment)
+            {
+                var resized = ResizeInlineHighlight(fragment.Rect, _inlineDragCurrent, _inlineResizeHandle);
+                if (resized.Width < 3 || resized.Height < 3)
+                    return false;
+                SnapshotInlineUndo();
+                _inlineAnnotations[_inlineSelectedAnnotation] = fragment with { Rect = resized };
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
                 _inlineSelectedAnnotations.Count == 1 &&
                 _inlineSelectionOriginal is HighlightAnnotation highlight)
             {
@@ -1340,7 +1295,7 @@ public partial class HistoryLibraryWindow
                     rect,
                     _inlineColor,
                     DrawingColor.FromArgb(51, _inlineColor.R, _inlineColor.G, _inlineColor.B),
-                    _inlineShapeBorderColor));
+                    null));
                 return true;
             case ScreenshotCaptureMode.CircleShape when rect.Width > 2 && rect.Height > 2:
                 SnapshotInlineUndo();
@@ -1348,7 +1303,7 @@ public partial class HistoryLibraryWindow
                     rect,
                     _inlineColor,
                     DrawingColor.FromArgb(51, _inlineColor.R, _inlineColor.G, _inlineColor.B),
-                    _inlineShapeBorderColor));
+                    null));
                 return true;
             case ScreenshotCaptureMode.Eraser when rect.Width > 2 && rect.Height > 2:
                 SnapshotInlineUndo();
@@ -1437,6 +1392,12 @@ public partial class HistoryLibraryWindow
         if (_inlineProject is null)
             return;
 
+        selection = DrawingRectangle.Intersect(
+            selection,
+            new DrawingRectangle(0, 0, _inlineProject.BaseImage.Width, _inlineProject.BaseImage.Height));
+        if (selection.Width < 2 || selection.Height < 2)
+            return;
+
         try
         {
             using var flattened = RegionOverlayForm.RenderEditorProject(
@@ -1445,7 +1406,6 @@ public partial class HistoryLibraryWindow
                 strokeShadow: false);
             using var region = EditableScreenshotService.ExtractRegion(flattened, selection);
             ClipboardService.CopyToClipboard(region);
-            ToastWindow.Show("Region copied", $"{region.Width} × {region.Height} pixels copied to clipboard");
         }
         catch (Exception ex)
         {
@@ -1617,13 +1577,16 @@ public partial class HistoryLibraryWindow
             : new DrawingRectangle(selection.Left, 0, selection.Width, _inlineProject.BaseImage.Height);
     }
 
-    private void CommitInlineBaseTransform(Bitmap transformedBase, List<Annotation> annotations)
+    private void CommitInlineBaseTransform(
+        Bitmap transformedBase,
+        List<Annotation> annotations,
+        double? preservedDisplayScale = null)
     {
         if (_inlineProject is null || string.IsNullOrWhiteSpace(_inlineProjectPath))
             return;
 
         SnapshotInlineUndo(includeBaseImage: true);
-        ReplaceInlineBaseTransform(transformedBase, annotations, save: true);
+        ReplaceInlineBaseTransform(transformedBase, annotations, save: true, preservedDisplayScale);
     }
 
     internal static System.Drawing.Size CalculateExpandedCanvasSize(
@@ -1635,7 +1598,11 @@ public partial class HistoryLibraryWindow
             Math.Max(canvasWidth, pastedWidth),
             Math.Max(canvasHeight, pastedHeight));
 
-    private void ReplaceInlineBaseTransform(Bitmap transformedBase, List<Annotation> annotations, bool save)
+    private void ReplaceInlineBaseTransform(
+        Bitmap transformedBase,
+        List<Annotation> annotations,
+        bool save,
+        double? preservedDisplayScale = null)
     {
         if (_inlineProject is null || string.IsNullOrWhiteSpace(_inlineProjectPath))
             return;
@@ -1645,6 +1612,15 @@ public partial class HistoryLibraryWindow
         _inlineQueuedSaveJob = null;
         _inlineProject.Dispose();
         _inlineProject = new EditableScreenshotProject(transformedBase, annotations, true);
+        if (preservedDisplayScale is { } displayScale)
+        {
+            _inlineZoomFactor = CalculateInlineZoomForDisplayScale(
+                Math.Max(1d, EditorHost.ActualWidth - 24d),
+                Math.Max(1d, EditorHost.ActualHeight - 24d),
+                transformedBase.Width,
+                transformedBase.Height,
+                displayScale);
+        }
         _inlineAnnotations.Clear();
         _inlineAnnotations.AddRange(annotations);
         _inlinePreviewAnnotations.Clear();
@@ -1783,6 +1759,8 @@ public partial class HistoryLibraryWindow
         Bitmap? resizedCanvas = null;
         try
         {
+            double preservedDisplayScale = GetInlineDisplayScale();
+            var viewportCenter = CaptureInlineViewportCenter();
             resizedCanvas = new Bitmap(right - left, bottom - top, DrawingPixelFormat.Format32bppArgb);
             using (var graphics = Graphics.FromImage(resizedCanvas))
             {
@@ -1794,8 +1772,9 @@ public partial class HistoryLibraryWindow
                 .Select(annotation => EditableScreenshotService.Translate(annotation, -left, -top))
                 .Where(annotation => GetInlineAnnotationBounds(annotation).IntersectsWith(canvasBounds))
                 .ToList();
-            CommitInlineBaseTransform(resizedCanvas, annotations);
+            CommitInlineBaseTransform(resizedCanvas, annotations, preservedDisplayScale);
             resizedCanvas = null;
+            RestoreInlineViewportCenter(viewportCenter.Horizontal, viewportCenter.Vertical);
             ShowInlineCanvasResizeFrame();
         }
         catch (Exception ex)
@@ -2672,6 +2651,7 @@ public partial class HistoryLibraryWindow
                    ScreenshotCaptureMode.CurvedArrow or
                    ScreenshotCaptureMode.Draw or
                    ScreenshotCaptureMode.Crop or
+                   ScreenshotCaptureMode.CopyRegion or
                    ScreenshotCaptureMode.CanvasResize;
 
     private bool TryGetInlineImagePoint(
@@ -2740,14 +2720,48 @@ public partial class HistoryLibraryWindow
         if (viewportWidth <= 0d || viewportHeight <= 0d || imageWidth <= 0 || imageHeight <= 0)
             return 1d;
         double fitScale = Math.Min(viewportWidth / imageWidth, viewportHeight / imageHeight);
-        return Math.Max(0.01d, fitScale) * Math.Clamp(zoomFactor, 0.25d, 4d);
+        return Math.Max(0.01d, fitScale) * Math.Clamp(zoomFactor, 0.05d, 4d);
+    }
+
+    internal static double CalculateInlineZoomForDisplayScale(
+        double viewportWidth,
+        double viewportHeight,
+        int imageWidth,
+        int imageHeight,
+        double desiredDisplayScale)
+    {
+        if (viewportWidth <= 0d || viewportHeight <= 0d || imageWidth <= 0 || imageHeight <= 0)
+            return 1d;
+        double fitScale = Math.Min(viewportWidth / imageWidth, viewportHeight / imageHeight);
+        return Math.Clamp(desiredDisplayScale / Math.Max(0.01d, fitScale), 0.05d, 4d);
     }
 
     internal static double CalculateInlineZoom(double currentZoom, int wheelDelta)
         => Math.Clamp(
             wheelDelta > 0 ? currentZoom * 1.15d : currentZoom / 1.15d,
-            0.25d,
+            0.05d,
             4d);
+
+    private (double Horizontal, double Vertical) CaptureInlineViewportCenter()
+        => (
+            EditorScrollViewer.ExtentWidth <= 0d
+                ? 0.5d
+                : (EditorScrollViewer.HorizontalOffset + EditorScrollViewer.ViewportWidth / 2d) / EditorScrollViewer.ExtentWidth,
+            EditorScrollViewer.ExtentHeight <= 0d
+                ? 0.5d
+                : (EditorScrollViewer.VerticalOffset + EditorScrollViewer.ViewportHeight / 2d) / EditorScrollViewer.ExtentHeight);
+
+    private void RestoreInlineViewportCenter(double horizontalCenter, double verticalCenter)
+    {
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            EditorScrollViewer.UpdateLayout();
+            EditorScrollViewer.ScrollToHorizontalOffset(
+                Math.Max(0d, horizontalCenter * EditorScrollViewer.ExtentWidth - EditorScrollViewer.ViewportWidth / 2d));
+            EditorScrollViewer.ScrollToVerticalOffset(
+                Math.Max(0d, verticalCenter * EditorScrollViewer.ExtentHeight - EditorScrollViewer.ViewportHeight / 2d));
+        }, DispatcherPriority.Loaded);
+    }
 
     private void EditorViewport_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
@@ -2758,25 +2772,13 @@ public partial class HistoryLibraryWindow
             return;
         }
 
-        double horizontalCenter = EditorScrollViewer.ExtentWidth <= 0d
-            ? 0.5d
-            : (EditorScrollViewer.HorizontalOffset + EditorScrollViewer.ViewportWidth / 2d) / EditorScrollViewer.ExtentWidth;
-        double verticalCenter = EditorScrollViewer.ExtentHeight <= 0d
-            ? 0.5d
-            : (EditorScrollViewer.VerticalOffset + EditorScrollViewer.ViewportHeight / 2d) / EditorScrollViewer.ExtentHeight;
+        var viewportCenter = CaptureInlineViewportCenter();
         double zoom = CalculateInlineZoom(_inlineZoomFactor, e.Delta);
         if (Math.Abs(zoom - _inlineZoomFactor) < 0.0001d)
             return;
         _inlineZoomFactor = zoom;
         RefreshInlineViewportGeometry();
-        _ = Dispatcher.BeginInvoke(() =>
-        {
-            EditorScrollViewer.UpdateLayout();
-            EditorScrollViewer.ScrollToHorizontalOffset(
-                Math.Max(0d, horizontalCenter * EditorScrollViewer.ExtentWidth - EditorScrollViewer.ViewportWidth / 2d));
-            EditorScrollViewer.ScrollToVerticalOffset(
-                Math.Max(0d, verticalCenter * EditorScrollViewer.ExtentHeight - EditorScrollViewer.ViewportHeight / 2d));
-        }, DispatcherPriority.Loaded);
+        RestoreInlineViewportCenter(viewportCenter.Horizontal, viewportCenter.Vertical);
         e.Handled = true;
     }
 
@@ -3223,6 +3225,14 @@ public partial class HistoryLibraryWindow
             }
             else if (_inlineResizeHandle != InlineResizeHandle.None &&
                 _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is ImageFragmentAnnotation fragment)
+            {
+                ShowInlineSelection(
+                    ResizeInlineHighlight(fragment.Rect, _inlineDragCurrent, _inlineResizeHandle),
+                    clearPreview: false);
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
+                _inlineSelectedAnnotations.Count == 1 &&
                 _inlineSelectionOriginal is HighlightAnnotation highlight)
             {
                 ShowInlineSelection(
@@ -3266,7 +3276,7 @@ public partial class HistoryLibraryWindow
         double width = Math.Abs(to.X - from.X);
         double height = Math.Abs(to.Y - from.Y);
         var shapeFill = new SolidColorBrush(MediaColor.FromArgb(51, _inlineColor.R, _inlineColor.G, _inlineColor.B));
-        var shapeBorder = _inlineShapeBorderColor is { } borderColor ? ToMediaBrush(borderColor) : null;
+        SolidColorBrush? shapeBorder = null;
         Shape shape = _inlineTool switch
         {
             ScreenshotCaptureMode.Highlight => new System.Windows.Shapes.Rectangle
@@ -3282,6 +3292,13 @@ public partial class HistoryLibraryWindow
             {
                 Fill = new SolidColorBrush(MediaColor.FromArgb(30, 250, 204, 21)),
                 Stroke = new SolidColorBrush(MediaColor.FromRgb(250, 204, 21)),
+                StrokeThickness = 2,
+                StrokeDashArray = [5, 3]
+            },
+            ScreenshotCaptureMode.CopyRegion => new System.Windows.Shapes.Rectangle
+            {
+                Fill = new SolidColorBrush(MediaColor.FromArgb(24, 37, 99, 235)),
+                Stroke = new SolidColorBrush(MediaColor.FromRgb(37, 99, 235)),
                 StrokeThickness = 2,
                 StrokeDashArray = [5, 3]
             },
@@ -3324,6 +3341,15 @@ public partial class HistoryLibraryWindow
                 original is TextAnnotation text)
             {
                 preview = ResizeInlineTextWidth(text, _inlineDragCurrent);
+            }
+            else if (index == _inlineSelectedAnnotation &&
+                     _inlineResizeHandle != InlineResizeHandle.None &&
+                     original is ImageFragmentAnnotation fragment)
+            {
+                preview = fragment with
+                {
+                    Rect = ResizeInlineHighlight(fragment.Rect, _inlineDragCurrent, _inlineResizeHandle)
+                };
             }
             else if (index == _inlineSelectedAnnotation &&
                      _inlineResizeHandle != InlineResizeHandle.None &&
@@ -3415,7 +3441,7 @@ public partial class HistoryLibraryWindow
             Canvas.SetTop(selection, topLeft.Y);
             EditorCanvas.Children.Add(selection);
 
-            if (_inlineSelectedAnnotations.Count == 1 && selected is HighlightAnnotation)
+            if (_inlineSelectedAnnotations.Count == 1 && selected is HighlightAnnotation or ImageFragmentAnnotation)
             {
                 AddInlineResizeHandle(topLeft.X, topLeft.Y);
                 AddInlineResizeHandle(bottomRight.X, topLeft.Y);
@@ -3593,14 +3619,20 @@ public partial class HistoryLibraryWindow
             return false;
         }
 
-        if (_inlineAnnotations[_inlineSelectedAnnotation] is not HighlightAnnotation highlight)
+        DrawingRectangle resizeBounds = _inlineAnnotations[_inlineSelectedAnnotation] switch
+        {
+            HighlightAnnotation highlight => highlight.Rect,
+            ImageFragmentAnnotation fragment => fragment.Rect,
+            _ => DrawingRectangle.Empty
+        };
+        if (resizeBounds.IsEmpty)
             return false;
         var corners = new (InlineResizeHandle Handle, DrawingPoint Point)[]
         {
-            (InlineResizeHandle.TopLeft, new DrawingPoint(highlight.Rect.Left, highlight.Rect.Top)),
-            (InlineResizeHandle.TopRight, new DrawingPoint(highlight.Rect.Right, highlight.Rect.Top)),
-            (InlineResizeHandle.BottomLeft, new DrawingPoint(highlight.Rect.Left, highlight.Rect.Bottom)),
-            (InlineResizeHandle.BottomRight, new DrawingPoint(highlight.Rect.Right, highlight.Rect.Bottom))
+            (InlineResizeHandle.TopLeft, new DrawingPoint(resizeBounds.Left, resizeBounds.Top)),
+            (InlineResizeHandle.TopRight, new DrawingPoint(resizeBounds.Right, resizeBounds.Top)),
+            (InlineResizeHandle.BottomLeft, new DrawingPoint(resizeBounds.Left, resizeBounds.Bottom)),
+            (InlineResizeHandle.BottomRight, new DrawingPoint(resizeBounds.Right, resizeBounds.Bottom))
         };
         foreach (var candidate in corners)
         {

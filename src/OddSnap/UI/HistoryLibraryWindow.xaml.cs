@@ -537,9 +537,13 @@ public partial class HistoryLibraryWindow : Window
     }
 
     private void SelectTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Select);
-    private void CopyTool_Click(object sender, RoutedEventArgs e) => CopyCurrentLibraryImage();
     private void ArrowTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Arrow);
-    private void CropTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Crop);
+    private void CropTool_Click(object sender, RoutedEventArgs e)
+    {
+        _inlineCropMode = InlineCropMode.KeepSelection;
+        SetInlineEditorTool(ScreenshotCaptureMode.Crop);
+    }
+    private void CopyRegionTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.CopyRegion);
     private void TextTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Text);
     private void HighlightTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Highlight);
     private void BlurTool_Click(object sender, RoutedEventArgs e) => SetInlineEditorTool(ScreenshotCaptureMode.Blur);
