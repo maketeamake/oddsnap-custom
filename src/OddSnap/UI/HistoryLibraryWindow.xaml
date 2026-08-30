@@ -375,6 +375,7 @@
                                 <Grid x:Name="EditorViewport" ClipToBounds="True"
                                       Background="Transparent"
                                       MouseLeftButtonDown="EditorViewport_MouseLeftButtonDown"
+                                      MouseRightButtonDown="EditorViewport_MouseRightButtonDown"
                                       MouseMove="EditorViewport_MouseMove"
                                       MouseLeftButtonUp="EditorViewport_MouseLeftButtonUp">
                                     <Image x:Name="PreviewImage" Stretch="Fill" IsHitTestVisible="False"/>

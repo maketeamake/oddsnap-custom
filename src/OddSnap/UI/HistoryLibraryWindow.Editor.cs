@@ -1040,6 +1040,44 @@ public partial class HistoryLibraryWindow
         e.Handled = true;
     }
 
+    private void EditorViewport_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_inlineProject is null || e.OriginalSource is System.Windows.Controls.TextBox)
+            return;
+
+        CommitInlineTextEditor(save: true);
+        CommitInlineStepEditor(save: true);
+        if (!TryGetInlineImagePoint(e.GetPosition(EditorViewport), out var imagePoint))
+            return;
+
+        int hitAnnotation = HitTestInlineAnnotation(imagePoint);
+        if (hitAnnotation < 0)
+            return;
+        if (!_inlineSelectedAnnotations.Contains(hitAnnotation))
+            SelectOnlyInlineAnnotation(hitAnnotation);
+        else
+            _inlineSelectedAnnotation = hitAnnotation;
+        SnapshotInlineSelectionForDrag();
+        ShowInlineSelection();
+
+        var flattenItem = new MenuItem { Header = "Flatten selected" };
+        flattenItem.Click += (_, _) => FlattenInlineSelection();
+        var deleteItem = new MenuItem { Header = "Delete selected" };
+        deleteItem.Click += (_, _) => DeleteInlineSelection();
+        var menu = new WpfContextMenu
+        {
+            PlacementTarget = EditorViewport,
+            Items =
+            {
+                flattenItem,
+                new Separator(),
+                deleteItem
+            }
+        };
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
     private void EditorViewport_MouseMove(object sender, MouseEventArgs e)
     {
         if (_inlineProject is null ||
@@ -1319,9 +1357,7 @@ public partial class HistoryLibraryWindow
                     null));
                 return true;
             case ScreenshotCaptureMode.Eraser when rect.Width > 2 && rect.Height > 2:
-                SnapshotInlineUndo();
-                _inlineAnnotations.Add(new EraserFill(rect, _inlineEraserColor));
-                return true;
+                return ApplyInlineFlattenedErase(rect);
             default:
                 return false;
         }
@@ -1840,6 +1876,63 @@ public partial class HistoryLibraryWindow
             return;
         using var rendered = RenderFlattenedInlineImage();
         CommitInlineBaseTransform(new Bitmap(rendered), []);
+    }
+
+    private void FlattenInlineSelection()
+    {
+        if (_inlineProject is null)
+            return;
+
+        var selected = _inlineSelectedAnnotations
+            .Where(index => index >= 0 && index < _inlineAnnotations.Count)
+            .OrderBy(index => index)
+            .ToArray();
+        if (selected.Length == 0)
+            return;
+
+        var selectedSet = selected.ToHashSet();
+        var annotationsToFlatten = selected.Select(index => _inlineAnnotations[index]).ToList();
+        var remainingAnnotations = _inlineAnnotations
+            .Where((_, index) => !selectedSet.Contains(index))
+            .ToList();
+        using var rendered = RegionOverlayForm.RenderEditorProject(
+            _inlineProject.BaseImage,
+            annotationsToFlatten,
+            strokeShadow: false);
+        CommitInlineBaseTransform(new Bitmap(rendered), remainingAnnotations);
+    }
+
+    private bool ApplyInlineFlattenedErase(DrawingRectangle rect)
+    {
+        if (_inlineProject is null)
+            return false;
+
+        Bitmap? flattened = null;
+        try
+        {
+            flattened = RenderFlattenedInlineImage();
+            using (var graphics = Graphics.FromImage(flattened))
+            using (var brush = new SolidBrush(_inlineEraserColor))
+            {
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                graphics.FillRectangle(brush, rect);
+            }
+
+            SnapshotInlineUndo(includeBaseImage: true);
+            ReplaceInlineBaseTransform(flattened, [], save: false);
+            flattened = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.eraser-flatten", ex);
+            ToastWindow.ShowError("Erase failed", ex.Message);
+            return false;
+        }
+        finally
+        {
+            flattened?.Dispose();
+        }
     }
 
     private void ResizeInlineImage()
