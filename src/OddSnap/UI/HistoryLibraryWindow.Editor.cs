@@ -4,6 +4,7 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -16,6 +17,7 @@ using OddSnap.Helpers;
 using OddSnap.Models;
 using OddSnap.Services;
 using DrawingColor = System.Drawing.Color;
+using DrawingPixelFormat = System.Drawing.Imaging.PixelFormat;
 using DrawingPoint = System.Drawing.Point;
 using DrawingRectangle = System.Drawing.Rectangle;
 using MediaBrush = System.Windows.Media.Brush;
@@ -53,7 +55,8 @@ public partial class HistoryLibraryWindow
         [ScreenshotCaptureMode.Arrow] = DefaultInlineDrawingColor,
         [ScreenshotCaptureMode.Draw] = DefaultInlineDrawingColor,
         [ScreenshotCaptureMode.Highlight] = DefaultInlineDrawingColor,
-        [ScreenshotCaptureMode.Text] = DefaultInlineDrawingColor
+        [ScreenshotCaptureMode.Text] = DefaultInlineDrawingColor,
+        [ScreenshotCaptureMode.Fill] = DefaultInlineDrawingColor
     };
     private InlineCropMode _inlineCropMode = InlineCropMode.KeepSelection;
     private DrawingColor? _inlineShapeBorderColor;
@@ -107,7 +110,11 @@ public partial class HistoryLibraryWindow
         TopRight,
         BottomLeft,
         BottomRight,
-        TextRight
+        TextRight,
+        CanvasTopLeft,
+        CanvasTopRight,
+        CanvasBottomLeft,
+        CanvasBottomRight
     }
 
     private enum InlineCropMode
@@ -135,7 +142,10 @@ public partial class HistoryLibraryWindow
         RegisterInlineToolButton(CircleToolButton, ScreenshotCaptureMode.CircleShape, "circleShape", 0, "Circle");
         RegisterInlineToolButton(EmojiToolButton, ScreenshotCaptureMode.Emoji, "emoji", 0, "Emoji");
         RegisterInlineToolButton(EraserToolButton, ScreenshotCaptureMode.Eraser, "eraser", 0, "Eraser");
+        RegisterInlineToolButton(FillToolButton, ScreenshotCaptureMode.Fill, "highlightBlock", 0, "Flood fill");
         RegisterInlineToolButton(CropToolButton, ScreenshotCaptureMode.Crop, "rect", 0, "Crop image");
+        RegisterInlineToolButton(CanvasResizeToolButton, ScreenshotCaptureMode.CanvasResize, "fullscreen", 0, "Resize canvas by dragging its border");
+        CopyToolButton.Content = CreateInlineToolIcon("copy", 0, false);
         InitializeColorMenuVisuals(ColorToolButton.ContextMenu);
         InitializeColorMenuVisuals(ShapeBorderToolButton.ContextMenu);
         InitializeColorMenuVisuals(ArrowPresetButton.ContextMenu);
@@ -265,6 +275,8 @@ public partial class HistoryLibraryWindow
         _inlineResizeHandle = InlineResizeHandle.None;
         ClearInlinePreview();
         UpdateInlineToolButtons();
+        if (mode == ScreenshotCaptureMode.CanvasResize)
+            ShowInlineCanvasResizeFrame();
         EditorViewport.Cursor = mode == ScreenshotCaptureMode.Text ? WpfCursors.IBeam : WpfCursors.Cross;
     }
 
@@ -309,9 +321,23 @@ public partial class HistoryLibraryWindow
 
         _inlineSelectionPreviousPreview = PreviewImage.Source;
         _inlineSelectionPreviousPreviewAnnotations = _inlinePreviewAnnotations.ToList();
-        PreviewImage.Source = BitmapToBitmapSource(_inlineProject.BaseImage);
+        PreviewImage.Source = RenderInlinePreviewExcluding(_inlineSelectedAnnotations);
         _inlinePreviewAnnotations.Clear();
+        _inlinePreviewAnnotations.AddRange(_inlineAnnotations);
         RefreshPendingInlineAnnotations();
+    }
+
+    private BitmapSource RenderInlinePreviewExcluding(IEnumerable<int> excludedIndices)
+    {
+        var excluded = excludedIndices.ToHashSet();
+        var visibleAnnotations = _inlineAnnotations
+            .Where((_, index) => !excluded.Contains(index))
+            .ToList();
+        using var rendered = RegionOverlayForm.RenderEditorProject(
+            _inlineProject!.BaseImage,
+            visibleAnnotations,
+            strokeShadow: false);
+        return BitmapToBitmapSource(rendered);
     }
 
     private void RestoreInlineSelectionDragPreview()
@@ -774,6 +800,13 @@ public partial class HistoryLibraryWindow
         if (e.OriginalSource is System.Windows.Controls.TextBox)
             return;
 
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt) && e.Key == Key.W)
+        {
+            e.Handled = true;
+            ResizeInlineImage();
+            return;
+        }
+
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         {
             if (e.Key == Key.Z)
@@ -891,6 +924,25 @@ public partial class HistoryLibraryWindow
             _inlineDragStart = imagePoint;
             _inlineDragCurrent = imagePoint;
             _inlineDragging = true;
+            EditorViewport.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
+        if (_inlineTool == ScreenshotCaptureMode.Fill)
+        {
+            ApplyInlineFloodFill(imagePoint);
+            e.Handled = true;
+            return;
+        }
+
+        if (_inlineTool == ScreenshotCaptureMode.CanvasResize && TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
+        {
+            _inlineResizeHandle = canvasHandle;
+            _inlineDragStart = imagePoint;
+            _inlineDragCurrent = imagePoint;
+            _inlineDragging = true;
+            _inlineDraggingSelection = false;
             EditorViewport.CaptureMouse();
             e.Handled = true;
             return;
@@ -1044,7 +1096,12 @@ public partial class HistoryLibraryWindow
 
         if (!_inlineDragging)
         {
-            if (TryHitInlineResizeHandle(imagePoint, out var resizeHandle))
+            if (_inlineTool == ScreenshotCaptureMode.CanvasResize &&
+                TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
+            {
+                EditorViewport.Cursor = GetInlineResizeCursor(canvasHandle);
+            }
+            else if (TryHitInlineResizeHandle(imagePoint, out var resizeHandle))
             {
                 EditorViewport.Cursor = GetInlineResizeCursor(resizeHandle);
             }
@@ -1142,6 +1199,17 @@ public partial class HistoryLibraryWindow
             _inlineResizeHandle = InlineResizeHandle.None;
             ClearInlinePreview();
             ApplyInlineCrop(cropRect);
+            e.Handled = true;
+            return;
+        }
+
+        if (_inlineTool == ScreenshotCaptureMode.CanvasResize && !_inlineDraggingSelection)
+        {
+            var handle = _inlineResizeHandle;
+            _inlineAllowOutsideDrag = false;
+            _inlineResizeHandle = InlineResizeHandle.None;
+            ClearInlinePreview();
+            ApplyInlineCanvasResize(handle, _inlineDragCurrent);
             e.Handled = true;
             return;
         }
@@ -1431,19 +1499,39 @@ public partial class HistoryLibraryWindow
             {
                 CommitInlineTextEditor(save: true);
                 CommitInlineStepEditor(save: true);
-                using var fitted = FitInlineClipboardImage(clipboardImage);
+                SnapshotInlineUndo(includeBaseImage: true);
+                var expandedSize = CalculateExpandedCanvasSize(
+                    _inlineProject.BaseImage.Width,
+                    _inlineProject.BaseImage.Height,
+                    clipboardImage.Width,
+                    clipboardImage.Height);
+                int canvasWidth = expandedSize.Width;
+                int canvasHeight = expandedSize.Height;
+                if (canvasWidth != _inlineProject.BaseImage.Width || canvasHeight != _inlineProject.BaseImage.Height)
+                {
+                    var expanded = new Bitmap(canvasWidth, canvasHeight, DrawingPixelFormat.Format32bppArgb);
+                    using (var graphics = Graphics.FromImage(expanded))
+                    {
+                        graphics.Clear(DrawingColor.White);
+                        graphics.DrawImageUnscaled(_inlineProject.BaseImage, 0, 0);
+                    }
+                    ReplaceInlineBaseTransform(expanded, _inlineAnnotations.ToList(), save: false);
+                }
                 var destination = new DrawingPoint(
-                    Math.Max(0, (_inlineProject.BaseImage.Width - fitted.Width) / 2),
-                    Math.Max(0, (_inlineProject.BaseImage.Height - fitted.Height) / 2));
-                var fragment = EditableScreenshotService.CreateImageFragment(fitted, destination);
-                SnapshotInlineUndo();
+                    Math.Max(0, (_inlineProject.BaseImage.Width - clipboardImage.Width) / 2),
+                    Math.Max(0, (_inlineProject.BaseImage.Height - clipboardImage.Height) / 2));
+                var fragment = EditableScreenshotService.CreateImageFragment(clipboardImage, destination);
                 _inlineAnnotations.Add(fragment);
                 SelectOnlyInlineAnnotation(_inlineAnnotations.Count - 1);
                 SnapshotInlineSelectionForDrag();
                 _inlineResizeHandle = InlineResizeHandle.None;
                 SaveInlineEditor();
                 ShowInlineSelection();
-                ToastWindow.Show("Image pasted", "Drag the selected image to place it");
+                ToastWindow.Show(
+                    "Image pasted at original size",
+                    canvasWidth > clipboardImage.Width || canvasHeight > clipboardImage.Height
+                        ? "Drag the selected image to place it"
+                        : $"Canvas expanded to {canvasWidth} × {canvasHeight} pixels");
                 return true;
             }
         }
@@ -1453,16 +1541,6 @@ public partial class HistoryLibraryWindow
             ToastWindow.ShowError("Paste failed", ex.Message);
             return false;
         }
-    }
-
-    private Bitmap FitInlineClipboardImage(Bitmap source)
-    {
-        int maximumWidth = Math.Max(1, _inlineProject!.BaseImage.Width - 40);
-        int maximumHeight = Math.Max(1, _inlineProject.BaseImage.Height - 40);
-        double scale = Math.Min(1d, Math.Min(maximumWidth / (double)source.Width, maximumHeight / (double)source.Height));
-        int width = Math.Max(1, (int)Math.Round(source.Width * scale));
-        int height = Math.Max(1, (int)Math.Round(source.Height * scale));
-        return new Bitmap(source, new System.Drawing.Size(width, height));
     }
 
     private void ApplyInlineCutOut(DrawingRectangle selection)
@@ -1545,6 +1623,23 @@ public partial class HistoryLibraryWindow
             return;
 
         SnapshotInlineUndo(includeBaseImage: true);
+        ReplaceInlineBaseTransform(transformedBase, annotations, save: true);
+    }
+
+    internal static System.Drawing.Size CalculateExpandedCanvasSize(
+        int canvasWidth,
+        int canvasHeight,
+        int pastedWidth,
+        int pastedHeight)
+        => new(
+            Math.Max(canvasWidth, pastedWidth),
+            Math.Max(canvasHeight, pastedHeight));
+
+    private void ReplaceInlineBaseTransform(Bitmap transformedBase, List<Annotation> annotations, bool save)
+    {
+        if (_inlineProject is null || string.IsNullOrWhiteSpace(_inlineProjectPath))
+            return;
+
         EditableScreenshotService.ReplaceProjectBase(_inlineProjectPath, transformedBase, annotations);
         _inlineQueuedSaveJob?.BaseImage.Dispose();
         _inlineQueuedSaveJob = null;
@@ -1558,7 +1653,254 @@ public partial class HistoryLibraryWindow
         PreviewImage.Source = BitmapToBitmapSource(transformedBase);
         PreviewEmptyText.Visibility = Visibility.Collapsed;
         RefreshPendingInlineAnnotations();
-        SaveInlineEditor();
+        if (save)
+            SaveInlineEditor();
+    }
+
+    private void ApplyInlineFloodFill(DrawingPoint point)
+    {
+        if (_inlineProject is null)
+            return;
+
+        Bitmap? filled = null;
+        try
+        {
+            filled = FloodFillBitmap(_inlineProject.BaseImage, point, _inlineColor, tolerance: 24);
+            if (filled is null)
+                return;
+            CommitInlineBaseTransform(filled, _inlineAnnotations.ToList());
+            filled = null;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.fill", ex);
+            ToastWindow.ShowError("Fill failed", ex.Message);
+        }
+        finally
+        {
+            filled?.Dispose();
+        }
+    }
+
+    internal static Bitmap? FloodFillBitmap(Bitmap source, DrawingPoint point, DrawingColor replacement, int tolerance)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (point.X < 0 || point.Y < 0 || point.X >= source.Width || point.Y >= source.Height)
+            return null;
+
+        var result = new Bitmap(source.Width, source.Height, DrawingPixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(result))
+            graphics.DrawImageUnscaled(source, 0, 0);
+
+        var targetColor = result.GetPixel(point.X, point.Y);
+        if (Math.Abs(targetColor.R - replacement.R) <= tolerance &&
+            Math.Abs(targetColor.G - replacement.G) <= tolerance &&
+            Math.Abs(targetColor.B - replacement.B) <= tolerance &&
+            Math.Abs(targetColor.A - replacement.A) <= tolerance)
+        {
+            result.Dispose();
+            return null;
+        }
+
+        var bounds = new DrawingRectangle(0, 0, result.Width, result.Height);
+        var data = result.LockBits(bounds, ImageLockMode.ReadWrite, DrawingPixelFormat.Format32bppArgb);
+        try
+        {
+            int bytes = Math.Abs(data.Stride) * result.Height;
+            var pixels = new byte[bytes];
+            Marshal.Copy(data.Scan0, pixels, 0, bytes);
+            int start = point.Y * data.Stride + point.X * 4;
+            byte targetB = pixels[start];
+            byte targetG = pixels[start + 1];
+            byte targetR = pixels[start + 2];
+            byte targetA = pixels[start + 3];
+            var queue = new Queue<int>();
+            var visited = new bool[result.Width * result.Height];
+            int startPixel = point.Y * result.Width + point.X;
+            queue.Enqueue(startPixel);
+            visited[startPixel] = true;
+            bool Matches(int pixel)
+            {
+                int x = pixel % result.Width;
+                int y = pixel / result.Width;
+                int offset = y * data.Stride + x * 4;
+                return Math.Abs(pixels[offset] - targetB) <= tolerance &&
+                       Math.Abs(pixels[offset + 1] - targetG) <= tolerance &&
+                       Math.Abs(pixels[offset + 2] - targetR) <= tolerance &&
+                       Math.Abs(pixels[offset + 3] - targetA) <= tolerance;
+            }
+
+            while (queue.TryDequeue(out int pixel))
+            {
+                if (!Matches(pixel))
+                    continue;
+                int x = pixel % result.Width;
+                int y = pixel / result.Width;
+                int offset = y * data.Stride + x * 4;
+                pixels[offset] = replacement.B;
+                pixels[offset + 1] = replacement.G;
+                pixels[offset + 2] = replacement.R;
+                pixels[offset + 3] = replacement.A;
+
+                void Enqueue(int candidate)
+                {
+                    if (!visited[candidate])
+                    {
+                        visited[candidate] = true;
+                        queue.Enqueue(candidate);
+                    }
+                }
+                if (x > 0) Enqueue(pixel - 1);
+                if (x + 1 < result.Width) Enqueue(pixel + 1);
+                if (y > 0) Enqueue(pixel - result.Width);
+                if (y + 1 < result.Height) Enqueue(pixel + result.Width);
+            }
+            Marshal.Copy(pixels, 0, data.Scan0, bytes);
+        }
+        finally
+        {
+            result.UnlockBits(data);
+        }
+        return result;
+    }
+
+    private void ApplyInlineCanvasResize(InlineResizeHandle handle, DrawingPoint point)
+    {
+        if (_inlineProject is null || handle is InlineResizeHandle.None)
+            return;
+
+        int left = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomLeft ? point.X : 0;
+        int top = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasTopRight ? point.Y : 0;
+        int right = handle is InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomRight ? point.X : _inlineProject.BaseImage.Width;
+        int bottom = handle is InlineResizeHandle.CanvasBottomLeft or InlineResizeHandle.CanvasBottomRight ? point.Y : _inlineProject.BaseImage.Height;
+        if (right - left < 10 || bottom - top < 10 ||
+            (left == 0 && top == 0 && right == _inlineProject.BaseImage.Width && bottom == _inlineProject.BaseImage.Height))
+        {
+            ShowInlineCanvasResizeFrame();
+            return;
+        }
+
+        Bitmap? resizedCanvas = null;
+        try
+        {
+            resizedCanvas = new Bitmap(right - left, bottom - top, DrawingPixelFormat.Format32bppArgb);
+            using (var graphics = Graphics.FromImage(resizedCanvas))
+            {
+                graphics.Clear(DrawingColor.White);
+                graphics.DrawImageUnscaled(_inlineProject.BaseImage, -left, -top);
+            }
+            var canvasBounds = new DrawingRectangle(0, 0, resizedCanvas.Width, resizedCanvas.Height);
+            var annotations = _inlineAnnotations
+                .Select(annotation => EditableScreenshotService.Translate(annotation, -left, -top))
+                .Where(annotation => GetInlineAnnotationBounds(annotation).IntersectsWith(canvasBounds))
+                .ToList();
+            CommitInlineBaseTransform(resizedCanvas, annotations);
+            resizedCanvas = null;
+            ShowInlineCanvasResizeFrame();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.canvas-resize", ex);
+            ToastWindow.ShowError("Canvas resize failed", ex.Message);
+        }
+        finally
+        {
+            resizedCanvas?.Dispose();
+        }
+    }
+
+    private void ImageActionsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ImageActionsButton.ContextMenu is not { } menu)
+            return;
+        menu.PlacementTarget = ImageActionsButton;
+        menu.IsOpen = true;
+    }
+
+    private void ImageAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string action })
+            return;
+        switch (action)
+        {
+            case "resize": ResizeInlineImage(); break;
+            case "flatten": FlattenInlineImage(); break;
+            case "rotate90": RotateFlipInlineImage(RotateFlipType.Rotate90FlipNone); break;
+            case "rotate270": RotateFlipInlineImage(RotateFlipType.Rotate270FlipNone); break;
+            case "rotate180": RotateFlipInlineImage(RotateFlipType.Rotate180FlipNone); break;
+            case "flipHorizontal": RotateFlipInlineImage(RotateFlipType.RotateNoneFlipX); break;
+            case "flipVertical": RotateFlipInlineImage(RotateFlipType.RotateNoneFlipY); break;
+            case "rotateCustom":
+                if (InlineImageTransformDialog.TryGetAngle(this, out double angle))
+                    RotateInlineImage(angle);
+                break;
+        }
+    }
+
+    private Bitmap RenderFlattenedInlineImage()
+        => RegionOverlayForm.RenderEditorProject(_inlineProject!.BaseImage, _inlineAnnotations, strokeShadow: false);
+
+    private void FlattenInlineImage()
+    {
+        if (_inlineProject is null)
+            return;
+        using var rendered = RenderFlattenedInlineImage();
+        CommitInlineBaseTransform(new Bitmap(rendered), []);
+    }
+
+    private void ResizeInlineImage()
+    {
+        if (_inlineProject is null || !InlineImageTransformDialog.TryGetResize(
+                this,
+                _inlineProject.BaseImage.Width,
+                _inlineProject.BaseImage.Height,
+                out var options))
+            return;
+
+        using var rendered = RenderFlattenedInlineImage();
+        var resized = new Bitmap(options.Width, options.Height, DrawingPixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(resized))
+        {
+            graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+            graphics.InterpolationMode = options.Smooth
+                ? System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic
+                : System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            graphics.PixelOffsetMode = options.Smooth
+                ? System.Drawing.Drawing2D.PixelOffsetMode.HighQuality
+                : System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            graphics.DrawImage(rendered, new DrawingRectangle(0, 0, resized.Width, resized.Height));
+        }
+        CommitInlineBaseTransform(resized, []);
+    }
+
+    private void RotateFlipInlineImage(RotateFlipType rotateFlip)
+    {
+        if (_inlineProject is null)
+            return;
+        using var rendered = RenderFlattenedInlineImage();
+        var transformed = new Bitmap(rendered);
+        transformed.RotateFlip(rotateFlip);
+        CommitInlineBaseTransform(transformed, []);
+    }
+
+    private void RotateInlineImage(double angle)
+    {
+        if (_inlineProject is null)
+            return;
+        using var rendered = RenderFlattenedInlineImage();
+        double radians = angle * Math.PI / 180d;
+        int width = Math.Max(1, (int)Math.Ceiling(Math.Abs(rendered.Width * Math.Cos(radians)) + Math.Abs(rendered.Height * Math.Sin(radians))));
+        int height = Math.Max(1, (int)Math.Ceiling(Math.Abs(rendered.Width * Math.Sin(radians)) + Math.Abs(rendered.Height * Math.Cos(radians))));
+        var transformed = new Bitmap(width, height, DrawingPixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(transformed))
+        {
+            graphics.Clear(DrawingColor.White);
+            graphics.TranslateTransform(width / 2f, height / 2f);
+            graphics.RotateTransform((float)angle);
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.DrawImageUnscaled(rendered, -rendered.Width / 2, -rendered.Height / 2);
+        }
+        CommitInlineBaseTransform(transformed, []);
     }
 
     private void BeginInlineTextEditing(
@@ -1617,8 +1959,9 @@ public partial class HistoryLibraryWindow
         {
             _inlineTextPreviousPreview = PreviewImage.Source;
             _inlineTextPreviousPreviewAnnotations = _inlinePreviewAnnotations.ToList();
-            PreviewImage.Source = BitmapToBitmapSource(_inlineProject.BaseImage);
+            PreviewImage.Source = RenderInlinePreviewExcluding([_inlineEditingTextIndex]);
             _inlinePreviewAnnotations.Clear();
+            _inlinePreviewAnnotations.AddRange(_inlineAnnotations);
         }
         PositionInlineTextEditor(_inlineTextPosition, _inlineTextMaxWidth, _inlineTextEditorHeight);
         InlineTextEditor.Visibility = Visibility.Visible;
@@ -1668,8 +2011,9 @@ public partial class HistoryLibraryWindow
         SelectOnlyInlineAnnotation(index);
         _inlineStepPreviousPreview = PreviewImage.Source;
         _inlineStepPreviousPreviewAnnotations = _inlinePreviewAnnotations.ToList();
-        PreviewImage.Source = BitmapToBitmapSource(_inlineProject.BaseImage);
+        PreviewImage.Source = RenderInlinePreviewExcluding([index]);
         _inlinePreviewAnnotations.Clear();
+        _inlinePreviewAnnotations.AddRange(_inlineAnnotations);
         PositionInlineStepEditor(step.Pos);
         InlineStepEditor.Text = step.Number.ToString(CultureInfo.InvariantCulture);
         InlineStepEditor.Foreground = ToMediaBrush(step.Color);
@@ -2327,7 +2671,8 @@ public partial class HistoryLibraryWindow
                    ScreenshotCaptureMode.Line or
                    ScreenshotCaptureMode.CurvedArrow or
                    ScreenshotCaptureMode.Draw or
-                   ScreenshotCaptureMode.Crop;
+                   ScreenshotCaptureMode.Crop or
+                   ScreenshotCaptureMode.CanvasResize;
 
     private bool TryGetInlineImagePoint(
         System.Windows.Point viewportPoint,
@@ -2447,7 +2792,11 @@ public partial class HistoryLibraryWindow
                  _inlineAnnotations[_inlineEditingStepIndex] is StepNumberAnnotation step)
             PositionInlineStepEditor(step.Pos);
         else
+        {
             ShowInlineSelection(clearPreview: false);
+            if (_inlineTool == ScreenshotCaptureMode.CanvasResize)
+                ShowInlineCanvasResizeFrame(clearPreview: false);
+        }
     }
 
     private void UpdateInlinePreviewImageSize()
@@ -2611,24 +2960,30 @@ public partial class HistoryLibraryWindow
                 break;
             case StepNumberAnnotation step:
                 {
-                    var center = ToInlineViewportPoint(step.Pos);
-                    double size = Math.Max(2d, 28d * scale);
-                    var badge = new Ellipse { Width = size, Height = size, Fill = ToMediaBrush(step.Color) };
-                    Canvas.SetLeft(badge, center.X - size / 2);
-                    Canvas.SetTop(badge, center.Y - size / 2);
-                    canvas.Children.Add(badge);
-                    var label = new TextBlock
+                    var imageBounds = RegionOverlayForm.MeasureStepNumberBounds(step.Pos, step.Number);
+                    var topLeft = ToInlineViewportPoint(new DrawingPoint((int)Math.Floor(imageBounds.Left), (int)Math.Floor(imageBounds.Top)));
+                    double width = Math.Max(2d, imageBounds.Width * scale);
+                    double height = Math.Max(2d, imageBounds.Height * scale);
+                    var badge = new Border
                     {
-                        Text = step.Number.ToString(),
-                        Foreground = MediaBrushes.White,
-                        FontSize = Math.Max(1d, 14.7d * scale),
-                        FontWeight = FontWeights.Bold,
-                        Width = size,
-                        TextAlignment = TextAlignment.Center
+                        Width = width,
+                        Height = height,
+                        CornerRadius = new CornerRadius(height / 2d),
+                        Background = ToMediaBrush(step.Color),
+                        Child = new TextBlock
+                        {
+                            Text = step.Number.ToString(CultureInfo.CurrentCulture),
+                            Foreground = GetInlineStepTextBrush(step.Color),
+                            FontSize = Math.Max(1d, 11d * (96d / 72d) * scale),
+                            FontWeight = FontWeights.Bold,
+                            TextAlignment = TextAlignment.Center,
+                            HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        }
                     };
-                    Canvas.SetLeft(label, center.X - size / 2);
-                    Canvas.SetTop(label, center.Y - size / 2d + Math.Max(0d, (size - label.FontSize * 1.25d) / 2d));
-                    canvas.Children.Add(label);
+                    Canvas.SetLeft(badge, topLeft.X);
+                    Canvas.SetTop(badge, topLeft.Y);
+                    canvas.Children.Add(badge);
                     break;
                 }
             case TextAnnotation text:
@@ -2704,19 +3059,27 @@ public partial class HistoryLibraryWindow
         var start = ToInlineViewportPoint(from);
         var end = ToInlineViewportPoint(to);
         double scale = GetInlineDisplayScale();
+        double imageLength = Distance(from, to);
+        double headLength = arrowHead ? CalculateInlineArrowheadSize(imageLength, scale) : 0d;
+        double dx = end.X - start.X;
+        double dy = end.Y - start.Y;
+        double displayLength = Math.Sqrt(dx * dx + dy * dy);
+        var shaftEnd = displayLength > 0d && arrowHead
+            ? new System.Windows.Point(end.X - dx / displayLength * headLength * 0.38d, end.Y - dy / displayLength * headLength * 0.38d)
+            : end;
         canvas.Children.Add(new Line
         {
             X1 = start.X,
             Y1 = start.Y,
-            X2 = end.X,
-            Y2 = end.Y,
+            X2 = shaftEnd.X,
+            Y2 = shaftEnd.Y,
             Stroke = ToMediaBrush(color),
             StrokeThickness = Math.Max(0.6d, 3.2d * scale),
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round
         });
         if (arrowHead)
-            AddPendingArrowHead(start, end, color, canvas, Distance(from, to));
+            AddPendingArrowHead(start, end, color, canvas, imageLength);
     }
 
     private void AddPendingArrowHead(
@@ -2734,19 +3097,42 @@ public partial class HistoryLibraryWindow
         double ux = dx / length;
         double uy = dy / length;
         double headLength = CalculateInlineArrowheadSize(imageLength, GetInlineDisplayScale());
-        double headWidth = headLength * Math.Tan(25d * Math.PI / 180d);
+        double angle = 25d * Math.PI / 180d;
         var basePoint = new System.Windows.Point(end.X - ux * headLength, end.Y - uy * headLength);
-        var normal = new System.Windows.Vector(-uy * headWidth, ux * headWidth);
-        canvas.Children.Add(new Polygon
+        var left = RotateInlinePoint(basePoint, end, -angle);
+        var right = RotateInlinePoint(basePoint, end, angle);
+        double thickness = Math.Max(0.6d, 3.2d * GetInlineDisplayScale());
+        foreach (var point in new[] { left, right })
         {
-            Fill = ToMediaBrush(color),
-            Points = new PointCollection
+            canvas.Children.Add(new Line
             {
-                end,
-                basePoint + normal,
-                basePoint - normal
-            }
-        });
+                X1 = point.X,
+                Y1 = point.Y,
+                X2 = end.X,
+                Y2 = end.Y,
+                Stroke = ToMediaBrush(color),
+                StrokeThickness = thickness,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round
+            });
+        }
+    }
+
+    private static System.Windows.Point RotateInlinePoint(System.Windows.Point point, System.Windows.Point center, double radians)
+    {
+        double dx = point.X - center.X;
+        double dy = point.Y - center.Y;
+        double cosine = Math.Cos(radians);
+        double sine = Math.Sin(radians);
+        return new System.Windows.Point(
+            center.X + dx * cosine - dy * sine,
+            center.Y + dx * sine + dy * cosine);
+    }
+
+    private static MediaBrush GetInlineStepTextBrush(DrawingColor color)
+    {
+        int luma = (color.R * 299 + color.G * 587 + color.B * 114) / 1000;
+        return luma > 140 ? new SolidColorBrush(MediaColor.FromRgb(20, 20, 20)) : MediaBrushes.White;
     }
 
     internal static double CalculateInlineArrowheadSize(double imageLength, double displayScale)
@@ -2820,6 +3206,11 @@ public partial class HistoryLibraryWindow
         var from = ToInlineViewportPoint(previewStart);
         var to = ToInlineViewportPoint(previewEnd);
         var brush = new SolidColorBrush(MediaColor.FromArgb(_inlineColor.A, _inlineColor.R, _inlineColor.G, _inlineColor.B));
+        if (_inlineTool == ScreenshotCaptureMode.CanvasResize)
+        {
+            ShowInlineCanvasResizePreview(_inlineResizeHandle, _inlineDragCurrent);
+            return;
+        }
         if (_inlineDraggingSelection)
         {
             AddInlineSelectionDragPreview();
@@ -2850,10 +3241,23 @@ public partial class HistoryLibraryWindow
 
         if (_inlineTool is ScreenshotCaptureMode.Draw or ScreenshotCaptureMode.CurvedArrow)
         {
-            var polyline = new Polyline { Stroke = brush, StrokeThickness = 4, StrokeLineJoin = PenLineJoin.Round };
-            foreach (var point in _inlinePoints)
-                polyline.Points.Add(ToInlineViewportPoint(point));
-            EditorCanvas.Children.Add(polyline);
+            Annotation preview = _inlineTool == ScreenshotCaptureMode.Draw
+                ? new DrawStroke(_inlinePoints.ToList(), _inlineColor)
+                : new CurvedArrowAnnotation(_inlinePoints.ToList(), _inlineColor);
+            AddPendingInlineAnnotation(preview, EditorCanvas);
+            return;
+        }
+
+
+        if (_inlineTool is ScreenshotCaptureMode.Arrow or ScreenshotCaptureMode.Line or ScreenshotCaptureMode.Ruler)
+        {
+            Annotation preview = _inlineTool switch
+            {
+                ScreenshotCaptureMode.Arrow => new ArrowAnnotation(previewStart, previewEnd, _inlineColor),
+                ScreenshotCaptureMode.Ruler => new RulerAnnotation(previewStart, previewEnd),
+                _ => new LineAnnotation(previewStart, previewEnd, _inlineColor)
+            };
+            AddPendingInlineAnnotation(preview, EditorCanvas);
             return;
         }
 
@@ -3091,6 +3495,80 @@ public partial class HistoryLibraryWindow
         EditorCanvas.Children.Add(handle);
     }
 
+    private void ShowInlineCanvasResizeFrame(bool clearPreview = true)
+    {
+        if (_inlineProject is null || _inlineTool != ScreenshotCaptureMode.CanvasResize)
+            return;
+        if (clearPreview)
+            ClearInlinePreview();
+        var rect = GetInlineDisplayRect();
+        var outline = new System.Windows.Shapes.Rectangle
+        {
+            Width = Math.Max(1, rect.Width),
+            Height = Math.Max(1, rect.Height),
+            Stroke = new SolidColorBrush(MediaColor.FromRgb(96, 165, 250)),
+            StrokeThickness = 2,
+            StrokeDashArray = [4, 2],
+            Fill = MediaBrushes.Transparent
+        };
+        Canvas.SetLeft(outline, rect.Left);
+        Canvas.SetTop(outline, rect.Top);
+        EditorCanvas.Children.Add(outline);
+        AddInlineResizeHandle(rect.Left, rect.Top);
+        AddInlineResizeHandle(rect.Right, rect.Top);
+        AddInlineResizeHandle(rect.Left, rect.Bottom);
+        AddInlineResizeHandle(rect.Right, rect.Bottom);
+    }
+
+    private void ShowInlineCanvasResizePreview(InlineResizeHandle handle, DrawingPoint point)
+    {
+        if (_inlineProject is null)
+            return;
+        int left = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomLeft ? point.X : 0;
+        int top = handle is InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasTopRight ? point.Y : 0;
+        int right = handle is InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomRight ? point.X : _inlineProject.BaseImage.Width;
+        int bottom = handle is InlineResizeHandle.CanvasBottomLeft or InlineResizeHandle.CanvasBottomRight ? point.Y : _inlineProject.BaseImage.Height;
+        var topLeft = ToInlineViewportPoint(new DrawingPoint(left, top));
+        var bottomRight = ToInlineViewportPoint(new DrawingPoint(right, bottom));
+        var preview = new System.Windows.Shapes.Rectangle
+        {
+            Width = Math.Max(1, bottomRight.X - topLeft.X),
+            Height = Math.Max(1, bottomRight.Y - topLeft.Y),
+            Stroke = new SolidColorBrush(MediaColor.FromRgb(96, 165, 250)),
+            StrokeThickness = 2,
+            StrokeDashArray = [4, 2],
+            Fill = new SolidColorBrush(MediaColor.FromArgb(24, 96, 165, 250))
+        };
+        Canvas.SetLeft(preview, topLeft.X);
+        Canvas.SetTop(preview, topLeft.Y);
+        EditorCanvas.Children.Add(preview);
+    }
+
+    private bool TryHitInlineCanvasHandle(DrawingPoint point, out InlineResizeHandle handle)
+    {
+        handle = InlineResizeHandle.None;
+        if (_inlineProject is null || _inlineTool != ScreenshotCaptureMode.CanvasResize)
+            return false;
+        int tolerance = Math.Max(6, (int)Math.Ceiling(9d / Math.Max(0.05d, GetInlineDisplayScale())));
+        var corners = new (InlineResizeHandle Handle, DrawingPoint Point)[]
+        {
+            (InlineResizeHandle.CanvasTopLeft, new DrawingPoint(0, 0)),
+            (InlineResizeHandle.CanvasTopRight, new DrawingPoint(_inlineProject.BaseImage.Width, 0)),
+            (InlineResizeHandle.CanvasBottomLeft, new DrawingPoint(0, _inlineProject.BaseImage.Height)),
+            (InlineResizeHandle.CanvasBottomRight, new DrawingPoint(_inlineProject.BaseImage.Width, _inlineProject.BaseImage.Height))
+        };
+        foreach (var candidate in corners)
+        {
+            if (Math.Abs(point.X - candidate.Point.X) <= tolerance &&
+                Math.Abs(point.Y - candidate.Point.Y) <= tolerance)
+            {
+                handle = candidate.Handle;
+                return true;
+            }
+        }
+        return false;
+    }
+
     private bool TryHitInlineResizeHandle(DrawingPoint point, out InlineResizeHandle handle)
     {
         handle = InlineResizeHandle.None;
@@ -3138,8 +3616,10 @@ public partial class HistoryLibraryWindow
 
     private static System.Windows.Input.Cursor GetInlineResizeCursor(InlineResizeHandle handle) => handle switch
     {
-        InlineResizeHandle.TopLeft or InlineResizeHandle.BottomRight => WpfCursors.SizeNWSE,
-        InlineResizeHandle.TopRight or InlineResizeHandle.BottomLeft => WpfCursors.SizeNESW,
+        InlineResizeHandle.TopLeft or InlineResizeHandle.BottomRight or
+        InlineResizeHandle.CanvasTopLeft or InlineResizeHandle.CanvasBottomRight => WpfCursors.SizeNWSE,
+        InlineResizeHandle.TopRight or InlineResizeHandle.BottomLeft or
+        InlineResizeHandle.CanvasTopRight or InlineResizeHandle.CanvasBottomLeft => WpfCursors.SizeNESW,
         InlineResizeHandle.TextRight => WpfCursors.SizeWE,
         _ => WpfCursors.SizeAll
     };
@@ -3299,7 +3779,7 @@ public partial class HistoryLibraryWindow
         RectShapeAnnotation value => value.Rect,
         CircleShapeAnnotation value => value.Rect,
         RulerAnnotation value => BoundsFromPoints(value.From, value.To, 12),
-        StepNumberAnnotation value => new DrawingRectangle(value.Pos.X - 18, value.Pos.Y - 18, 36, 36),
+        StepNumberAnnotation value => DrawingRectangle.Round(RegionOverlayForm.MeasureStepNumberBounds(value.Pos, value.Number)),
         TextAnnotation value => GetInlineTextFrameBounds(value),
         MagnifierAnnotation value => new DrawingRectangle(value.Pos.X - 64, value.Pos.Y - 64, 128, 128),
         EmojiAnnotation value => new DrawingRectangle(value.Pos.X, value.Pos.Y, (int)value.Size, (int)value.Size),

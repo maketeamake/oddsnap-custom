@@ -26,5 +26,7 @@ public enum CaptureMode
     Emoji = 20,
     Line = 21,
     Center = 22,
-    Crop = 23
+    Crop = 23,
+    Fill = 24,
+    CanvasResize = 25
 }

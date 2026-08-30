@@ -142,6 +142,10 @@
                                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,2,0"/>
                     </Grid>
                 </Button>
+                <Button x:Name="CopyToolButton" Style="{StaticResource LibraryToolButton}"
+                        Click="CopyTool_Click" ToolTip="Copy image">
+                    <Image Width="21" Height="21" Source="{x:Null}"/>
+                </Button>
                 <Button x:Name="SelectToolButton" Style="{StaticResource LibraryToolButton}" Click="SelectTool_Click" ToolTip="Select and move annotations"/>
                 <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
                     <Button x:Name="ArrowToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="ArrowTool_Click" ToolTip="Draw an arrow"/>
@@ -156,6 +160,8 @@
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>
+                    <Button x:Name="CurvedArrowToolButton" Style="{StaticResource LibraryToolButton}" Margin="3,0,0,0"
+                            Click="CurvedArrowTool_Click" ToolTip="Draw a curved arrow"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
                     <Button x:Name="DrawToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="DrawTool_Click" ToolTip="Draw freehand"/>
@@ -198,7 +204,6 @@
                     </Button>
                 </StackPanel>
                 <Button x:Name="LineToolButton" Style="{StaticResource LibraryToolButton}" Click="LineTool_Click" ToolTip="Draw a line"/>
-                <Button x:Name="CurvedArrowToolButton" Style="{StaticResource LibraryToolButton}" Click="CurvedArrowTool_Click" ToolTip="Draw a curved arrow"/>
                 <Button x:Name="BlurToolButton" Style="{StaticResource LibraryToolButton}" Click="BlurTool_Click" ToolTip="Blur an area"/>
                 <Button x:Name="StepToolButton" Style="{StaticResource LibraryToolButton}" Click="StepTool_Click" ToolTip="Add a numbered step"/>
                 <Button x:Name="RulerToolButton" Style="{StaticResource LibraryToolButton}" Click="RulerTool_Click" ToolTip="Measure distance"/>
@@ -219,6 +224,7 @@
                     </Button.ContextMenu>
                 </Button>
                 <Button x:Name="EraserToolButton" Style="{StaticResource LibraryToolButton}" Click="EraserTool_Click" ToolTip="Erase an area"/>
+                <Button x:Name="FillToolButton" Style="{StaticResource LibraryToolButton}" Click="FillTool_Click" ToolTip="Flood fill an area"/>
                 <StackPanel Orientation="Horizontal" Margin="3,0,0,0">
                     <Button x:Name="CropToolButton" Style="{StaticResource LibraryToolButton}" Margin="0" Click="CropTool_Click" ToolTip="Crop to selection"/>
                     <Button x:Name="CropPresetButton" Style="{StaticResource LibraryPresetButton}" Click="CropPresetButton_Click" Content="▾" ToolTip="Crop modes">
@@ -233,6 +239,26 @@
                         </Button.ContextMenu>
                     </Button>
                 </StackPanel>
+                <Button x:Name="CanvasResizeToolButton" Style="{StaticResource LibraryToolButton}"
+                        Click="CanvasResizeTool_Click" ToolTip="Resize canvas by dragging its border"/>
+                <Button x:Name="ImageActionsButton" Style="{StaticResource LibraryToolButton}"
+                        Click="ImageActionsButton_Click" ToolTip="Rotate, flip, resize, and flatten image">
+                    <TextBlock Text="Image" FontSize="10" FontWeight="SemiBold"/>
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Rotate 90° clockwise" Tag="rotate90" Click="ImageAction_Click"/>
+                            <MenuItem Header="Rotate 90° counterclockwise" Tag="rotate270" Click="ImageAction_Click"/>
+                            <MenuItem Header="Rotate 180°" Tag="rotate180" Click="ImageAction_Click"/>
+                            <MenuItem Header="Rotate custom angle…" Tag="rotateCustom" Click="ImageAction_Click"/>
+                            <Separator/>
+                            <MenuItem Header="Flip horizontal" Tag="flipHorizontal" Click="ImageAction_Click"/>
+                            <MenuItem Header="Flip vertical" Tag="flipVertical" Click="ImageAction_Click"/>
+                            <Separator/>
+                            <MenuItem Header="Resize image…    Alt+W" Tag="resize" Click="ImageAction_Click"/>
+                            <MenuItem Header="Flatten annotations" Tag="flatten" Click="ImageAction_Click"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
                 <Button x:Name="ColorToolButton" Style="{StaticResource LibraryToolButton}" Click="ColorTool_Click" ToolTip="Color and highlight opacity">
                     <Ellipse x:Name="ColorToolSwatch" Width="16" Height="16" Fill="#FFFF3B30"
                              Stroke="#FF6B7280" StrokeThickness="1"/>

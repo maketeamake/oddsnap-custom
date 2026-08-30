@@ -457,6 +457,19 @@ public sealed partial class RegionOverlayForm
         g.SmoothingMode = SmoothingMode.Default;
     }
 
+    internal static RectangleF MeasureStepNumberBounds(Point pos, int num)
+    {
+        using var bitmap = new Bitmap(1, 1);
+        using var graphics = Graphics.FromImage(bitmap);
+        var font = _stepNumberFont ??= UiChrome.ChromeFont(11f, FontStyle.Bold);
+        var size = graphics.MeasureString(num.ToString(), font);
+        const float horizontalPadding = 8f;
+        const float verticalPadding = 4f;
+        float width = Math.Max(size.Width + horizontalPadding * 2f, size.Height + verticalPadding * 2f);
+        float height = size.Height + verticalPadding * 2f;
+        return new RectangleF(pos.X - width / 2f, pos.Y - height / 2f, width, height);
+    }
+
     private void PaintPlacedMagnifier(Graphics g, Point pos, Rectangle srcRect)
     {
         PaintMagnifierAt(g, pos, srcRect, 1f);

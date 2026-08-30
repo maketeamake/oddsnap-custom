@@ -124,4 +124,43 @@ public sealed class HistoryLibraryEditorTests
         Assert.True(HistoryLibraryWindow.IsInlineTextFrameHit(text, new Point(270, 35)));
         Assert.False(HistoryLibraryWindow.IsInlineTextFrameHit(text, new Point(400, 35)));
     }
+
+    [Fact]
+    public void CalculateExpandedCanvasSize_NeverShrinksPastedImage()
+    {
+        Assert.Equal(
+            new Size(150, 100),
+            HistoryLibraryWindow.CalculateExpandedCanvasSize(100, 80, 150, 100));
+        Assert.Equal(
+            new Size(200, 120),
+            HistoryLibraryWindow.CalculateExpandedCanvasSize(200, 120, 90, 60));
+    }
+
+    [Fact]
+    public void FloodFillBitmap_RecolorsOnlyConnectedArea()
+    {
+        using var source = new Bitmap(3, 2);
+        source.SetPixel(0, 0, Color.White);
+        source.SetPixel(1, 0, Color.White);
+        source.SetPixel(2, 0, Color.Black);
+        source.SetPixel(0, 1, Color.White);
+        source.SetPixel(1, 1, Color.Black);
+        source.SetPixel(2, 1, Color.Black);
+
+        using var filled = HistoryLibraryWindow.FloodFillBitmap(source, new Point(0, 0), Color.Red, 0);
+
+        Assert.NotNull(filled);
+        Assert.Equal(Color.Red.ToArgb(), filled.GetPixel(1, 0).ToArgb());
+        Assert.Equal(Color.Black.ToArgb(), filled.GetPixel(2, 0).ToArgb());
+    }
+
+    [Fact]
+    public void StepNumberBounds_GrowForMultipleDigits()
+    {
+        var oneDigit = OddSnap.Capture.RegionOverlayForm.MeasureStepNumberBounds(new Point(50, 50), 1);
+        var fourDigits = OddSnap.Capture.RegionOverlayForm.MeasureStepNumberBounds(new Point(50, 50), 9999);
+
+        Assert.Equal(oneDigit.Height, fourDigits.Height, 2);
+        Assert.True(fourDigits.Width > oneDigit.Width);
+    }
 }

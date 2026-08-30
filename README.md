@@ -10,7 +10,7 @@ and is not affiliated with or endorsed by the upstream OddSnap project.
 
 ## Current release and support
 
-The current maintained release is **OddSnap Custom 0.8.48.34**. It targets
+The current maintained release is **OddSnap Custom 0.8.48.35**. It targets
 [.NET 10 LTS](https://dotnet.microsoft.com/platform/support/policy), which is
 in active Microsoft support through November 14, 2028, and Windows 10 version
 2004 (build 19041) or newer, including Windows 11.
@@ -25,7 +25,7 @@ Release notes and source archives are published on the
   integrated Library editor.
 - The Library combines capture history, date/application filters, a filmstrip,
   and non-destructive annotation editing.
-- Arrow, pencil, highlight, text, shape, step, blur, crop, and cut-out tools are
+- Arrow, pencil, highlight, text, shape, step, blur, fill, crop, and cut-out tools are
   available from one toolbar.
 - Tool colors and presets are independent and persist between uses.
 - Text blocks can be edited, moved, resized, wrapped, and styled after creation.
@@ -33,6 +33,11 @@ Release notes and source archives are published on the
   multi-selected with `Shift`.
 - Crop and cut-out operations support undo/redo; `Shift` constrains arrows to a
   horizontal or vertical axis.
+- Canvas corner handles resize or expand the working area directly. The Image
+  menu rotates, flips, flattens, or resizes the composed image; `Alt+W` opens
+  pixel/percentage resize with aspect-ratio and smoothing controls.
+- Clipboard images are pasted at their original resolution. When necessary,
+  the canvas expands instead of silently shrinking the pasted image.
 - A selected region can be copied to the clipboard or duplicated as a movable,
   persistent object without changing the original pixels.
 - `Enter` or `Ctrl+C` copies the current image and minimizes the Library.
