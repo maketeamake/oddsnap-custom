@@ -1,10 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms;
-using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using OddSnap.Helpers;
 using OddSnap.Models;
@@ -275,14 +272,12 @@ public sealed class TrayIcon : IDisposable
 
     private static Icon CreateDefaultIcon()
     {
-        var tint = IsTrayBackgroundDark() ? Color.White : Color.Black;
-        return CreateLogoIcon(tint, recording: false);
+        return CreateCaptureIcon(recording: false);
     }
 
     private static Icon CreateRecordingIcon()
     {
-        var tint = IsTrayBackgroundDark() ? Color.White : Color.Black;
-        return CreateLogoIcon(tint, recording: true);
+        return CreateCaptureIcon(recording: true);
     }
 
     private static bool IsTrayBackgroundDark()
@@ -304,99 +299,25 @@ public sealed class TrayIcon : IDisposable
         return Theme.IsDark;
     }
 
-    private static Icon CreateLogoIcon(Color tint, bool recording)
+    private static Icon CreateCaptureIcon(bool recording)
     {
-        try
+        using var bitmap = new Bitmap(32, 32);
+        using (var graphics = Graphics.FromImage(bitmap))
         {
-            using var source = LoadLogoBitmap();
-            using var mono = CreateTintedLogoBitmap(source, tint);
-            var icon = CreateOwnedIcon(mono);
-            return recording ? OverlayRecordingDot(icon) : icon;
+            graphics.Clear(Color.Transparent);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var green = new SolidBrush(Color.FromArgb(34, 197, 94));
+            using var outline = new Pen(IsTrayBackgroundDark() ? Color.FromArgb(187, 247, 208) : Color.FromArgb(20, 83, 45), 2f);
+            using var lens = new SolidBrush(Color.FromArgb(20, 83, 45));
+            using var lensRing = new Pen(Color.White, 2f);
+            graphics.FillRectangle(green, 10, 5, 12, 5);
+            graphics.FillRectangle(green, 3, 9, 26, 19);
+            graphics.DrawRectangle(outline, 3, 9, 26, 19);
+            graphics.FillEllipse(lens, 10, 12, 12, 12);
+            graphics.DrawEllipse(lensRing, 10, 12, 12, 12);
         }
-        catch (Exception ex)
-        {
-            AppDiagnostics.LogWarning("tray.icon", "Failed to render the OddSnap tray icon; using the fallback icon.", ex);
-            return CreateFallbackIcon(recording, tint);
-        }
-    }
-
-    private static Bitmap LoadLogoBitmap()
-    {
-        var info = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/oddsnap_square.png", UriKind.Absolute));
-        if (info == null)
-            throw new InvalidOperationException("OddSnap logo resource was not found.");
-
-        using var stream = info.Stream;
-        var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-        var frame = decoder.Frames[0];
-        var stride = frame.PixelWidth * 4;
-        var pixels = new byte[stride * frame.PixelHeight];
-        var converted = new FormatConvertedBitmap(frame, System.Windows.Media.PixelFormats.Bgra32, null, 0);
-        converted.CopyPixels(pixels, stride, 0);
-
-        var bitmap = new Bitmap(frame.PixelWidth, frame.PixelHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        try
-        {
-            var rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
-            var data = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-            try
-            {
-                Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
-            }
-
-            return bitmap;
-        }
-        catch
-        {
-            bitmap.Dispose();
-            throw;
-        }
-    }
-
-    private static Bitmap CreateTintedLogoBitmap(Bitmap source, Color tint)
-    {
-        var tinted = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);
-        var rect = new Rectangle(0, 0, source.Width, source.Height);
-        BitmapData? sourceData = null;
-        BitmapData? tintedData = null;
-        var row = new byte[source.Width * 4];
-
-        try
-        {
-            sourceData = source.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            tintedData = tinted.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-
-            for (int y = 0; y < source.Height; y++)
-            {
-                Marshal.Copy(IntPtr.Add(sourceData.Scan0, y * sourceData.Stride), row, 0, row.Length);
-                for (int x = 0; x < source.Width; x++)
-                {
-                    int i = x * 4;
-                    row[i] = tint.B;
-                    row[i + 1] = tint.G;
-                    row[i + 2] = tint.R;
-                }
-                Marshal.Copy(row, 0, IntPtr.Add(tintedData.Scan0, y * tintedData.Stride), row.Length);
-            }
-
-            return tinted;
-        }
-        catch
-        {
-            tinted.Dispose();
-            throw;
-        }
-        finally
-        {
-            if (sourceData is not null)
-                source.UnlockBits(sourceData);
-            if (tintedData is not null)
-                tinted.UnlockBits(tintedData);
-        }
+        var icon = CreateOwnedIcon(bitmap);
+        return recording ? OverlayRecordingDot(icon) : icon;
     }
 
     private static Icon OverlayRecordingDot(Icon baseIcon)
@@ -417,28 +338,6 @@ public sealed class TrayIcon : IDisposable
         var result = CreateOwnedIcon(bmp);
         baseIcon.Dispose();
         return result;
-    }
-
-    private static Icon CreateFallbackIcon(bool recording, Color strokeColor)
-    {
-        using var bmp = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bmp))
-        {
-            g.Clear(Color.FromArgb(0, 0, 0, 0));
-            using var pen = new Pen(strokeColor, 3f);
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.DrawLine(pen, 6, 4, 16, 16);
-            g.DrawLine(pen, 26, 4, 16, 16);
-            g.DrawLine(pen, 16, 16, 16, 28);
-            if (recording)
-            {
-                using var halo = new SolidBrush(strokeColor);
-                g.FillEllipse(halo, 20, 21, 12, 12);
-                using var red = new SolidBrush(Color.FromArgb(239, 68, 68));
-                g.FillEllipse(red, 21, 22, 10, 10);
-            }
-        }
-        return CreateOwnedIcon(bmp);
     }
 
     private void RefreshAppTheme()
