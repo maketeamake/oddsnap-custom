@@ -47,7 +47,10 @@ public static class ClipboardService
     {
         var dataObject = new System.Windows.Forms.DataObject();
 
-        dataObject.SetData(System.Windows.Forms.DataFormats.Bitmap, bitmap);
+        // DataFormats.Bitmap hands the clipboard a GDI bitmap that is never freed,
+        // leaking one full-size frame per copy. A DIB stream gives the same pixels
+        // and Windows synthesizes CF_BITMAP from it for apps that ask.
+        dataObject.SetData(System.Windows.Forms.DataFormats.Dib, false, CreateDibStream(bitmap));
 
         if (payload.PngBytes is { } pngBytes && pngBytes.Array is not null && pngBytes.Count > 0)
         {
@@ -106,6 +109,50 @@ public static class ClipboardService
         throw new InvalidOperationException(
             "Windows clipboard is busy or the copied image is unavailable. Try again in a moment.",
             lastError);
+    }
+
+    private static MemoryStream CreateDibStream(Bitmap bitmap)
+    {
+        const int headerSize = 40;
+        int stride = bitmap.Width * 4;
+        var dib = new byte[headerSize + stride * bitmap.Height];
+        BitConverter.TryWriteBytes(dib.AsSpan(0), headerSize);
+        BitConverter.TryWriteBytes(dib.AsSpan(4), bitmap.Width);
+        BitConverter.TryWriteBytes(dib.AsSpan(8), bitmap.Height); // positive height = bottom-up rows
+        BitConverter.TryWriteBytes(dib.AsSpan(12), (short)1);
+        BitConverter.TryWriteBytes(dib.AsSpan(14), (short)32);
+        BitConverter.TryWriteBytes(dib.AsSpan(20), stride * bitmap.Height);
+
+        var rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        using var opaque = new Bitmap(bitmap.Width, bitmap.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        using (var g = Graphics.FromImage(opaque))
+        {
+            // Same backdrop Bitmap.GetHbitmap() used for transparent pixels.
+            g.Clear(Color.LightGray);
+            g.DrawImage(bitmap, rect);
+        }
+
+        var bits = opaque.LockBits(
+            rect,
+            System.Drawing.Imaging.ImageLockMode.ReadOnly,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                Marshal.Copy(
+                    bits.Scan0 + y * bits.Stride,
+                    dib,
+                    headerSize + (bitmap.Height - 1 - y) * stride,
+                    stride);
+            }
+        }
+        finally
+        {
+            opaque.UnlockBits(bits);
+        }
+
+        return new MemoryStream(dib, writable: false);
     }
 
     private static bool ShouldIncludePngClipboardPayload(Bitmap bitmap) =>
