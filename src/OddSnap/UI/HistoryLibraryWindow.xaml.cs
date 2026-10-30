@@ -526,6 +526,7 @@ public partial class HistoryLibraryWindow : Window
                 ? RegionOverlayForm.RenderEditorProject(_inlineProject.BaseImage, _inlineAnnotations, strokeShadow: false)
                 : BitmapPerf.LoadDetached(item.Entry.FilePath);
             ClipboardService.CopyToClipboard(bitmap, item.Entry.FilePath);
+            ProtectInlineClipboardAfterExternalCopy();
             ToastWindow.Show("Copied", "Screenshot copied to clipboard");
             return true;
         }
