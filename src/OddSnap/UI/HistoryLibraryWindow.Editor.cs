@@ -48,6 +48,7 @@ public partial class HistoryLibraryWindow
     private readonly List<Annotation> _inlinePreviewAnnotations = [];
     private readonly Dictionary<WpfButton, (ScreenshotCaptureMode Mode, string IconId, int Shortcut)> _inlineToolButtons = [];
     private static readonly ConditionalWeakTable<byte[], BitmapSource> InlineFragmentSources = new();
+    private const double InlineWorkspacePadding = 48d;
     private ScreenshotCaptureMode _inlineTool = ScreenshotCaptureMode.Select;
     private DrawingColor _inlineColor = DefaultInlineDrawingColor;
     private readonly Dictionary<ScreenshotCaptureMode, DrawingColor> _inlineToolColors = new()
@@ -70,6 +71,7 @@ public partial class HistoryLibraryWindow
     private readonly HashSet<int> _inlineSelectedAnnotations = [];
     private readonly Dictionary<int, Annotation> _inlineSelectionOriginals = [];
     private Annotation? _inlineSelectionOriginal;
+    private DrawingRectangle? _inlinePixelSelection;
     private InlineResizeHandle _inlineResizeHandle;
     private bool _inlineTextContentHit;
     private int _inlineEditingTextIndex = -1;
@@ -99,6 +101,10 @@ public partial class HistoryLibraryWindow
     private InlineSaveOperation? _inlineActiveSaveOperation;
     private long _inlineNextSaveSequence;
     private readonly Dictionary<string, long> _inlineLatestSaveSequenceByPath = new(StringComparer.OrdinalIgnoreCase);
+    private long _inlineClipboardIntentVersion;
+    private bool _inlineClipboardProtected;
+    private string? _inlineAutomaticClipboardToken;
+    private uint _inlineClipboardSequence;
     private bool _suppressHistoryRefresh;
     private double _inlineZoomFactor = 1d;
 
@@ -109,6 +115,8 @@ public partial class HistoryLibraryWindow
         TopRight,
         BottomLeft,
         BottomRight,
+        PathFrom,
+        PathTo,
         TextRight,
         CanvasLeft,
         CanvasTop,
@@ -231,6 +239,8 @@ public partial class HistoryLibraryWindow
             ClearInlineHistoryStack(_inlineUndoStack);
             ClearInlineHistoryStack(_inlineRedoStack);
             ClearInlineSelectionState();
+            ClearInlinePixelSelection();
+            ResetInlineClipboardTracking();
             _inlineResizeHandle = InlineResizeHandle.None;
             _inlineTool = preserveActiveTool ? activeTool : ScreenshotCaptureMode.Arrow;
             RestoreInlineToolColor();
@@ -261,6 +271,8 @@ public partial class HistoryLibraryWindow
         ClearInlineHistoryStack(_inlineUndoStack);
         ClearInlineHistoryStack(_inlineRedoStack);
         ClearInlineSelectionState();
+        ClearInlinePixelSelection();
+        ResetInlineClipboardTracking();
         _inlineResizeHandle = InlineResizeHandle.None;
         ClearInlinePreview();
         PendingAnnotationCanvas.Children.Clear();
@@ -287,8 +299,43 @@ public partial class HistoryLibraryWindow
         _inlineSelectionOriginal = null;
     }
 
+    private void ClearInlinePixelSelection()
+    {
+        _inlinePixelSelection = null;
+    }
+
+    private void ResetInlineClipboardTracking()
+    {
+        bool hasToken = ClipboardService.TryGetClipboardToken(out var token);
+        _inlineClipboardProtected = false;
+        _inlineAutomaticClipboardToken = hasToken ? token : null;
+        _inlineClipboardSequence = ClipboardService.GetClipboardSequenceNumberSafe();
+        _inlineClipboardIntentVersion++;
+    }
+
+    // Once the user copies or pastes something explicitly, background saves
+    // must stop replacing the clipboard with the rendered screenshot.
+    private void ProtectInlineClipboardFromAutomaticWrites()
+    {
+        _inlineClipboardIntentVersion++;
+        _inlineClipboardProtected = true;
+        _inlineAutomaticClipboardToken = null;
+        _inlineClipboardSequence = ClipboardService.GetClipboardSequenceNumberSafe();
+    }
+
+    private void MarkInlineExplicitClipboardCopy()
+    {
+        ProtectInlineClipboardFromAutomaticWrites();
+    }
+
+    internal void ProtectInlineClipboardAfterExternalCopy()
+    {
+        MarkInlineExplicitClipboardCopy();
+    }
+
     private void SelectOnlyInlineAnnotation(int index)
     {
+        ClearInlinePixelSelection();
         _inlineSelectedAnnotations.Clear();
         _inlineSelectionOriginals.Clear();
         if (index >= 0 && index < _inlineAnnotations.Count)
@@ -777,12 +824,40 @@ public partial class HistoryLibraryWindow
             else if (e.Key == Key.C)
             {
                 e.Handled = true;
-                if (CopyCurrentLibraryImage())
+                if (_inlineSelectedAnnotations.Count > 0)
+                    CopySelectedInlineAnnotations();
+                else if (_inlinePixelSelection is { } selection)
+                    CopyInlineSelection(selection);
+                else if (CopyCurrentLibraryImage())
                     WindowState = WindowState.Minimized;
+            }
+            else if (e.Key == Key.X)
+            {
+                if (_inlineSelectedAnnotations.Count > 0 && CopySelectedInlineAnnotations())
+                {
+                    DeleteInlineSelection();
+                    e.Handled = true;
+                }
+                else if (_inlinePixelSelection is { } selection && CopyInlineSelection(selection))
+                {
+                    ClearSelectedInlinePixels();
+                    e.Handled = true;
+                }
+            }
+            else if (e.Key == Key.A)
+            {
+                ClearInlinePixelSelection();
+                _inlineSelectedAnnotations.Clear();
+                for (int index = 0; index < _inlineAnnotations.Count; index++)
+                    _inlineSelectedAnnotations.Add(index);
+                _inlineSelectedAnnotation = _inlineSelectedAnnotations.LastOrDefault(-1);
+                SnapshotInlineSelectionForDrag();
+                ShowInlineSelection();
+                e.Handled = true;
             }
             else if (e.Key == Key.V)
             {
-                e.Handled = PasteInlineClipboardImage();
+                e.Handled = PasteInlineClipboardData();
             }
             return;
         }
@@ -802,13 +877,38 @@ public partial class HistoryLibraryWindow
         {
             SetInlineEditorTool(mode.Value);
             e.Handled = true;
+            return;
         }
-        else if (e.Key == Key.Delete)
+
+        if (e.Key == Key.Escape)
+        {
+            ClearInlineSelectionState();
+            ClearInlinePixelSelection();
+            _inlineResizeHandle = InlineResizeHandle.None;
+            ClearInlinePreview();
+            ShowInlineSelection();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Delete)
         {
             if (_inlineSelectedAnnotations.Count > 0)
                 DeleteInlineSelection();
+            else if (_inlinePixelSelection is not null)
+                ClearSelectedInlinePixels();
             else
                 DeleteSelectedScreenshot();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key is Key.Left or Key.Up or Key.Right or Key.Down && _inlineSelectedAnnotations.Count > 0)
+        {
+            int step = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 10 : 1;
+            int dx = e.Key == Key.Left ? -step : e.Key == Key.Right ? step : 0;
+            int dy = e.Key == Key.Up ? -step : e.Key == Key.Down ? step : 0;
+            NudgeInlineSelection(dx, dy);
             e.Handled = true;
         }
         else if (e.Key == Key.F2)
@@ -817,7 +917,7 @@ public partial class HistoryLibraryWindow
         }
         else if (e.Key == Key.Enter)
         {
-            if (SaveInlineEditor())
+            if (SaveInlineEditor() && CopyCurrentLibraryImage())
             {
                 e.Handled = true;
                 WindowState = WindowState.Minimized;
@@ -847,22 +947,13 @@ public partial class HistoryLibraryWindow
         _inlineDraggingSelection = false;
         _inlineTextContentHit = false;
 
-        if (canvasBorderProbe && TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
-        {
-            _inlineAllowOutsideDrag = true;
-            _inlineResizeHandle = canvasHandle;
-            _inlineDragStart = imagePoint;
-            _inlineDragCurrent = imagePoint;
-            _inlineDragging = true;
-            EditorViewport.Cursor = GetInlineResizeCursor(canvasHandle);
-            EditorViewport.CaptureMouse();
-            e.Handled = true;
-            return;
-        }
-
-        int doubleClickHit = _inlineTool == ScreenshotCaptureMode.StepNumber
-            ? HitTestInlineStepNumber(imagePoint)
-            : HitTestInlineAnnotation(imagePoint);
+        // Alt draws over existing objects instead of selecting them.
+        bool forceDrawing = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt) && IsInlineDrawingTool(_inlineTool);
+        int doubleClickHit = forceDrawing
+            ? -1
+            : _inlineTool == ScreenshotCaptureMode.StepNumber
+                ? HitTestInlineStepNumber(imagePoint)
+                : HitTestInlineAnnotation(imagePoint);
         if (e.ClickCount >= 2 && doubleClickHit >= 0)
         {
             ClearInlinePreview();
@@ -881,13 +972,15 @@ public partial class HistoryLibraryWindow
             }
         }
 
-        bool movableFragmentHit = _inlineCropMode == InlineCropMode.DuplicateSelection &&
+        bool movableFragmentHit = !forceDrawing &&
                                   HitTestInlineAnnotation(imagePoint) is var fragmentIndex &&
                                   fragmentIndex >= 0 &&
+                                  _inlineSelectedAnnotations.Contains(fragmentIndex) &&
                                   _inlineAnnotations[fragmentIndex] is ImageFragmentAnnotation;
         if (_inlineTool is ScreenshotCaptureMode.Crop or ScreenshotCaptureMode.CopyRegion && !movableFragmentHit)
         {
             ClearInlineSelectionState();
+            ClearInlinePixelSelection();
             _inlineResizeHandle = InlineResizeHandle.None;
             _inlineDragStart = imagePoint;
             _inlineDragCurrent = imagePoint;
@@ -904,9 +997,15 @@ public partial class HistoryLibraryWindow
             return;
         }
 
-        if (TryHitInlineResizeHandle(imagePoint, out var resizeHandle))
+        if (!forceDrawing && TryHitInlineResizeHandle(imagePoint, out var resizeHandle))
         {
-            _inlineAllowOutsideDrag = supportsOutside || resizeHandle == InlineResizeHandle.TextRight;
+            _inlineAllowOutsideDrag = supportsOutside ||
+                                      resizeHandle == InlineResizeHandle.TextRight ||
+                                      resizeHandle is InlineResizeHandle.PathFrom or InlineResizeHandle.PathTo ||
+                                      _inlineAnnotations[_inlineSelectedAnnotation] is ImageFragmentAnnotation or
+                                          RectShapeAnnotation or
+                                          CircleShapeAnnotation or
+                                          HighlightAnnotation;
             _inlineResizeHandle = resizeHandle;
             _inlineSelectionOriginal = _inlineAnnotations[_inlineSelectedAnnotation];
             SnapshotInlineSelectionForDrag();
@@ -916,6 +1015,19 @@ public partial class HistoryLibraryWindow
             _inlineDraggingSelection = true;
             BeginInlineSelectionDragPreview();
             EditorViewport.Cursor = GetInlineResizeCursor(resizeHandle);
+            EditorViewport.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
+        if (canvasBorderProbe && TryHitInlineCanvasHandle(imagePoint, out var canvasHandle))
+        {
+            _inlineAllowOutsideDrag = true;
+            _inlineResizeHandle = canvasHandle;
+            _inlineDragStart = imagePoint;
+            _inlineDragCurrent = imagePoint;
+            _inlineDragging = true;
+            EditorViewport.Cursor = GetInlineResizeCursor(canvasHandle);
             EditorViewport.CaptureMouse();
             e.Handled = true;
             return;
@@ -932,8 +1044,9 @@ public partial class HistoryLibraryWindow
             : HitTestInlineAnnotation(imagePoint);
         // Existing objects can be moved without abandoning the active drawing
         // tool. A click selects; a drag moves; the next empty drag draws again.
-        if (hitAnnotation >= 0)
+        if (!forceDrawing && hitAnnotation >= 0)
         {
+            ClearInlinePixelSelection();
             _inlineTextContentHit = _inlineTool == ScreenshotCaptureMode.Text &&
                                     _inlineAnnotations[hitAnnotation] is TextAnnotation hitText &&
                                     IsInlineTextContentHit(hitText, imagePoint);
@@ -967,7 +1080,7 @@ public partial class HistoryLibraryWindow
                 _inlineSelectionOriginal = _inlineAnnotations[hitAnnotation];
             }
             SnapshotInlineSelectionForDrag();
-            if (_inlineAnnotations[hitAnnotation] is TextAnnotation)
+            if (_inlineAnnotations[hitAnnotation] is TextAnnotation or ImageFragmentAnnotation)
                 _inlineAllowOutsideDrag = true;
             _inlineResizeHandle = InlineResizeHandle.None;
             _inlineDragStart = imagePoint;
@@ -985,6 +1098,11 @@ public partial class HistoryLibraryWindow
         }
 
         RestoreInlineToolColor();
+        if (_inlineTool != ScreenshotCaptureMode.Select)
+        {
+            ClearInlineSelectionState();
+            ClearInlinePixelSelection();
+        }
 
         if (_inlineTool == ScreenshotCaptureMode.Text)
         {
@@ -1041,6 +1159,7 @@ public partial class HistoryLibraryWindow
         {
             if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
                 ClearInlineSelectionState();
+            ClearInlinePixelSelection();
             _inlineResizeHandle = InlineResizeHandle.None;
             ShowInlineSelection();
         }
@@ -1071,6 +1190,20 @@ public partial class HistoryLibraryWindow
 
         var flattenItem = new MenuItem { Header = "Flatten selected" };
         flattenItem.Click += (_, _) => FlattenInlineSelection();
+        var copyItem = new MenuItem { Header = "Copy" };
+        copyItem.Click += (_, _) => CopySelectedInlineAnnotations();
+        var cutItem = new MenuItem { Header = "Cut" };
+        cutItem.Click += (_, _) =>
+        {
+            if (CopySelectedInlineAnnotations())
+                DeleteInlineSelection();
+        };
+        var duplicateItem = new MenuItem { Header = "Duplicate" };
+        duplicateItem.Click += (_, _) => DuplicateInlineSelectedAnnotations();
+        var bringForwardItem = new MenuItem { Header = "Bring forward" };
+        bringForwardItem.Click += (_, _) => ReorderInlineSelection(forward: true);
+        var sendBackItem = new MenuItem { Header = "Send back" };
+        sendBackItem.Click += (_, _) => ReorderInlineSelection(forward: false);
         var deleteItem = new MenuItem { Header = "Delete selected" };
         deleteItem.Click += (_, _) => DeleteInlineSelection();
         var menu = new WpfContextMenu
@@ -1078,6 +1211,13 @@ public partial class HistoryLibraryWindow
             PlacementTarget = EditorViewport,
             Items =
             {
+                copyItem,
+                cutItem,
+                duplicateItem,
+                new Separator(),
+                bringForwardItem,
+                sendBackItem,
+                new Separator(),
                 flattenItem,
                 new Separator(),
                 deleteItem
@@ -1085,6 +1225,89 @@ public partial class HistoryLibraryWindow
         };
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    private void DuplicateInlineSelectedAnnotations()
+    {
+        var selected = _inlineSelectedAnnotations
+            .Where(index => index >= 0 && index < _inlineAnnotations.Count)
+            .OrderBy(index => index)
+            .Select(index => _inlineAnnotations[index])
+            .ToList();
+        if (selected.Count == 0)
+            return;
+
+        SnapshotInlineUndo(selected.Any(annotation => annotation is ImageFragmentAnnotation));
+        int firstIndex = _inlineAnnotations.Count;
+        _inlineAnnotations.AddRange(EditableScreenshotService.CloneAnnotations(selected)
+            .Select(annotation => EditableScreenshotService.Translate(annotation, 16, 16)));
+        ClearInlinePixelSelection();
+        _inlineSelectedAnnotations.Clear();
+        for (int index = firstIndex; index < _inlineAnnotations.Count; index++)
+            _inlineSelectedAnnotations.Add(index);
+        _inlineSelectedAnnotation = _inlineAnnotations.Count - 1;
+        SnapshotInlineSelectionForDrag();
+        EnsureInlineFragmentsFitCanvas();
+        SaveInlineEditor();
+        ShowInlineSelection();
+    }
+
+    private void ReorderInlineSelection(bool forward)
+    {
+        var selectedIndices = _inlineSelectedAnnotations
+            .Where(index => index >= 0 && index < _inlineAnnotations.Count)
+            .ToHashSet();
+        if (selectedIndices.Count == 0 ||
+            !selectedIndices.Any(index => forward
+                ? index + 1 < _inlineAnnotations.Count && !selectedIndices.Contains(index + 1)
+                : index > 0 && !selectedIndices.Contains(index - 1)))
+        {
+            return;
+        }
+
+        var selected = new HashSet<Annotation>(
+            selectedIndices.Select(index => _inlineAnnotations[index]),
+            ReferenceEqualityComparer.Instance);
+        bool moved = false;
+        SnapshotInlineUndo();
+        if (forward)
+        {
+            for (int index = _inlineAnnotations.Count - 2; index >= 0; index--)
+            {
+                if (selected.Contains(_inlineAnnotations[index]) && !selected.Contains(_inlineAnnotations[index + 1]))
+                {
+                    (_inlineAnnotations[index], _inlineAnnotations[index + 1]) = (_inlineAnnotations[index + 1], _inlineAnnotations[index]);
+                    moved = true;
+                }
+            }
+        }
+        else
+        {
+            for (int index = 1; index < _inlineAnnotations.Count; index++)
+            {
+                if (selected.Contains(_inlineAnnotations[index]) && !selected.Contains(_inlineAnnotations[index - 1]))
+                {
+                    (_inlineAnnotations[index], _inlineAnnotations[index - 1]) = (_inlineAnnotations[index - 1], _inlineAnnotations[index]);
+                    moved = true;
+                }
+            }
+        }
+        if (!moved)
+        {
+            using var unchanged = _inlineUndoStack.Pop();
+            return;
+        }
+
+        _inlineSelectedAnnotations.Clear();
+        foreach (var entry in _inlineAnnotations.Select((value, index) => (value, index)))
+        {
+            if (selected.Contains(entry.value))
+                _inlineSelectedAnnotations.Add(entry.index);
+        }
+        _inlineSelectedAnnotation = _inlineSelectedAnnotations.LastOrDefault(-1);
+        SnapshotInlineSelectionForDrag();
+        SaveInlineEditor();
+        ShowInlineSelection();
     }
 
     private void EditorViewport_MouseMove(object sender, MouseEventArgs e)
@@ -1127,7 +1350,8 @@ public partial class HistoryLibraryWindow
         {
             _inlineDragCurrent = ConstrainInlineAxisPoint(_inlineDragStart, _inlineDragCurrent);
         }
-        if (_inlineTool is ScreenshotCaptureMode.Draw or ScreenshotCaptureMode.CurvedArrow)
+        if (!_inlineDraggingSelection &&
+            _inlineTool is ScreenshotCaptureMode.Draw or ScreenshotCaptureMode.CurvedArrow)
         {
             var last = _inlinePoints[^1];
             int dx = imagePoint.X - last.X;
@@ -1205,9 +1429,19 @@ public partial class HistoryLibraryWindow
             _inlineResizeHandle = InlineResizeHandle.None;
             ClearInlinePreview();
             if (_inlineTool == ScreenshotCaptureMode.CopyRegion)
-                CopyInlineSelection(cropRect);
+            {
+                var selection = IntersectInlineImageBounds(cropRect);
+                if (selection.Width >= 2 && selection.Height >= 2)
+                {
+                    _inlinePixelSelection = selection;
+                    CopyInlineSelection(selection);
+                    ShowInlineSelection();
+                }
+            }
             else
+            {
                 ApplyInlineCrop(cropRect);
+            }
             e.Handled = true;
             return;
         }
@@ -1270,15 +1504,30 @@ public partial class HistoryLibraryWindow
         {
             if (dx == 0 && dy == 0)
                 return false;
-            if (_inlineResizeHandle != InlineResizeHandle.None &&
+            if (_inlineResizeHandle is InlineResizeHandle.PathFrom or InlineResizeHandle.PathTo &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is ArrowAnnotation or LineAnnotation)
+            {
+                var resizedPath = ResizeInlinePath(_inlineSelectionOriginal, _inlineDragCurrent, _inlineResizeHandle);
+                if (resizedPath is null || Equals(resizedPath, _inlineSelectionOriginal))
+                    return false;
+                SnapshotInlineUndo();
+                _inlineAnnotations[_inlineSelectedAnnotation] = resizedPath;
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
                 _inlineSelectedAnnotations.Count == 1 &&
                 _inlineSelectionOriginal is ImageFragmentAnnotation fragment)
             {
-                var resized = ResizeInlineHighlight(fragment.Rect, _inlineDragCurrent, _inlineResizeHandle);
+                var resized = ResizeInlineHighlight(
+                    fragment.Rect,
+                    _inlineDragCurrent,
+                    _inlineResizeHandle,
+                    Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
                 if (resized.Width < 3 || resized.Height < 3)
                     return false;
-                SnapshotInlineUndo();
+                SnapshotInlineUndo(includeBaseImage: true);
                 _inlineAnnotations[_inlineSelectedAnnotation] = fragment with { Rect = resized };
+                EnsureInlineFragmentsFitCanvas();
             }
             else if (_inlineResizeHandle != InlineResizeHandle.None &&
                 _inlineSelectedAnnotations.Count == 1 &&
@@ -1290,6 +1539,30 @@ public partial class HistoryLibraryWindow
                 SnapshotInlineUndo();
                 var changedSelection = highlight with { Rect = resized };
                 _inlineAnnotations[_inlineSelectedAnnotation] = changedSelection;
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is RectShapeAnnotation rectangle)
+            {
+                var resized = ResizeInlineHighlight(
+                    rectangle.Rect,
+                    _inlineDragCurrent,
+                    _inlineResizeHandle,
+                    Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
+                if (resized.Width < 3 || resized.Height < 3)
+                    return false;
+                SnapshotInlineUndo();
+                _inlineAnnotations[_inlineSelectedAnnotation] = rectangle with { Rect = resized };
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is CircleShapeAnnotation circle)
+            {
+                var resized = ResizeInlineHighlight(circle.Rect, _inlineDragCurrent, _inlineResizeHandle, preserveAspect: true);
+                if (resized.Width < 3 || resized.Height < 3)
+                    return false;
+                SnapshotInlineUndo();
+                _inlineAnnotations[_inlineSelectedAnnotation] = circle with { Rect = resized };
             }
             else if (_inlineResizeHandle == InlineResizeHandle.TextRight &&
                      _inlineSelectedAnnotations.Count == 1 &&
@@ -1318,12 +1591,13 @@ public partial class HistoryLibraryWindow
                 dy = translation.Y;
                 if (_inlineSelectionOriginals.Count == 0)
                     SnapshotInlineSelectionForDrag();
-                SnapshotInlineUndo();
+                SnapshotInlineUndo(_inlineSelectionOriginals.Values.Any(annotation => annotation is ImageFragmentAnnotation));
                 foreach (var (index, original) in _inlineSelectionOriginals)
                 {
                     if (index >= 0 && index < _inlineAnnotations.Count)
                         _inlineAnnotations[index] = EditableScreenshotService.Translate(original, dx, dy);
                 }
+                EnsureInlineFragmentsFitCanvas();
             }
             SnapshotInlineSelectionForDrag();
             return true;
@@ -1459,16 +1733,14 @@ public partial class HistoryLibraryWindow
         }
     }
 
-    private void CopyInlineSelection(DrawingRectangle selection)
+    private bool CopyInlineSelection(DrawingRectangle selection)
     {
         if (_inlineProject is null)
-            return;
+            return false;
 
-        selection = DrawingRectangle.Intersect(
-            selection,
-            new DrawingRectangle(0, 0, _inlineProject.BaseImage.Width, _inlineProject.BaseImage.Height));
+        selection = IntersectInlineImageBounds(selection);
         if (selection.Width < 2 || selection.Height < 2)
-            return;
+            return false;
 
         try
         {
@@ -1478,11 +1750,99 @@ public partial class HistoryLibraryWindow
                 strokeShadow: false);
             using var region = EditableScreenshotService.ExtractRegion(flattened, selection);
             ClipboardService.CopyToClipboard(region);
+            MarkInlineExplicitClipboardCopy();
+            return true;
         }
         catch (Exception ex)
         {
             AppDiagnostics.LogError("library.inline-editor.copy-region", ex);
             ToastWindow.ShowError("Copy region failed", ex.Message);
+            return false;
+        }
+    }
+
+    private bool CopySelectedInlineAnnotations()
+    {
+        if (_inlineProject is null)
+            return false;
+
+        var selected = _inlineSelectedAnnotations
+            .Where(index => index >= 0 && index < _inlineAnnotations.Count)
+            .OrderBy(index => index)
+            .Select(index => _inlineAnnotations[index])
+            .ToList();
+        if (selected.Count == 0)
+            return false;
+
+        try
+        {
+            var bounds = GetInlineAnnotationsBounds(selected);
+            if (bounds.Width < 1 || bounds.Height < 1)
+                return false;
+
+            var annotations = selected
+                .Select(annotation => EditableScreenshotService.Translate(annotation, -bounds.Left, -bounds.Top))
+                .ToList();
+            using var background = new Bitmap(bounds.Width, bounds.Height, DrawingPixelFormat.Format32bppArgb);
+            using (var graphics = Graphics.FromImage(background))
+            {
+                graphics.Clear(DrawingColor.White);
+            }
+            using var rendered = RegionOverlayForm.RenderEditorProject(background, annotations, strokeShadow: false);
+            ClipboardService.CopyAnnotationsToClipboard(rendered, annotations);
+            MarkInlineExplicitClipboardCopy();
+            ToastWindow.Show("Objects copied", "Selected editable objects copied to clipboard");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.copy-objects", ex);
+            ToastWindow.ShowError("Copy failed", ex.Message);
+            return false;
+        }
+    }
+
+    private void ClearSelectedInlinePixels()
+    {
+        if (_inlineProject is null || _inlinePixelSelection is not { } selection)
+            return;
+
+        Bitmap? cleared = null;
+        try
+        {
+            selection = IntersectInlineImageBounds(selection);
+            if (selection.Width < 1 || selection.Height < 1)
+                return;
+
+            var flattenedAnnotations = _inlineAnnotations
+                .Where(annotation => GetInlineAnnotationBounds(annotation).IntersectsWith(selection))
+                .ToList();
+            var remainingAnnotations = _inlineAnnotations
+                .Where(annotation => !GetInlineAnnotationBounds(annotation).IntersectsWith(selection))
+                .ToList();
+            cleared = RegionOverlayForm.RenderEditorProject(_inlineProject.BaseImage, flattenedAnnotations, strokeShadow: false);
+            using (var graphics = Graphics.FromImage(cleared))
+            {
+                using var brush = new SolidBrush(DrawingColor.White);
+                graphics.FillRectangle(brush, selection);
+            }
+
+            SnapshotInlineUndo(includeBaseImage: true);
+            ReplaceInlineBaseTransform(cleared, remainingAnnotations, save: false);
+            cleared = null;
+            ClearInlinePixelSelection();
+            ClearInlinePreview();
+            SaveInlineEditor();
+            ShowInlineSelection();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.clear-region", ex);
+            ToastWindow.ShowError("Clear region failed", ex.Message);
+        }
+        finally
+        {
+            cleared?.Dispose();
         }
     }
 
@@ -1514,6 +1874,54 @@ public partial class HistoryLibraryWindow
         }
     }
 
+    private bool PasteInlineClipboardData()
+    {
+        if (ClipboardService.TryGetAnnotationsFromClipboard(out var annotations))
+            return PasteInlineClipboardAnnotations(annotations);
+        return PasteInlineClipboardImage();
+    }
+
+    private bool PasteInlineClipboardAnnotations(IReadOnlyList<Annotation> clipboardAnnotations)
+    {
+        if (_inlineProject is null || clipboardAnnotations.Count == 0)
+            return false;
+
+        try
+        {
+            CommitInlineTextEditor(save: true);
+            CommitInlineStepEditor(save: true);
+            var cloned = EditableScreenshotService.CloneAnnotations(clipboardAnnotations);
+            var bounds = GetInlineAnnotationsBounds(cloned);
+            int dx = _inlineProject.BaseImage.Width / 2 - (bounds.Left + bounds.Width / 2) + 16;
+            int dy = _inlineProject.BaseImage.Height / 2 - (bounds.Top + bounds.Height / 2) + 16;
+            var pasted = cloned
+                .Select(annotation => EditableScreenshotService.Translate(annotation, dx, dy))
+                .ToList();
+            SnapshotInlineUndo(pasted.Any(annotation => annotation is ImageFragmentAnnotation));
+            int firstIndex = _inlineAnnotations.Count;
+            _inlineAnnotations.AddRange(pasted);
+            ClearInlinePixelSelection();
+            _inlineSelectedAnnotations.Clear();
+            for (int index = firstIndex; index < _inlineAnnotations.Count; index++)
+                _inlineSelectedAnnotations.Add(index);
+            _inlineSelectedAnnotation = _inlineAnnotations.Count - 1;
+            EnsureInlineFragmentsFitCanvas();
+            SnapshotInlineSelectionForDrag();
+            _inlineResizeHandle = InlineResizeHandle.None;
+            ProtectInlineClipboardFromAutomaticWrites();
+            SaveInlineEditor();
+            ShowInlineSelection();
+            ToastWindow.Show("Objects pasted", "Editable objects pasted at the center of the image");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.paste-objects", ex);
+            ToastWindow.ShowError("Paste failed", ex.Message);
+            return false;
+        }
+    }
+
     private bool PasteInlineClipboardImage()
     {
         if (_inlineProject is null)
@@ -1532,6 +1940,8 @@ public partial class HistoryLibraryWindow
                 CommitInlineTextEditor(save: true);
                 CommitInlineStepEditor(save: true);
                 SnapshotInlineUndo(includeBaseImage: true);
+                double preservedDisplayScale = GetInlineDisplayScale();
+                var viewportCenter = CaptureInlineViewportCenter();
                 var expandedSize = CalculateExpandedCanvasSize(
                     _inlineProject.BaseImage.Width,
                     _inlineProject.BaseImage.Height,
@@ -1547,7 +1957,12 @@ public partial class HistoryLibraryWindow
                         graphics.Clear(DrawingColor.White);
                         graphics.DrawImageUnscaled(_inlineProject.BaseImage, 0, 0);
                     }
-                    ReplaceInlineBaseTransform(expanded, _inlineAnnotations.ToList(), save: false);
+                    ReplaceInlineBaseTransform(
+                        expanded,
+                        _inlineAnnotations.ToList(),
+                        save: false,
+                        preservedDisplayScale: preservedDisplayScale,
+                        clearSelection: false);
                 }
                 var destination = new DrawingPoint(
                     Math.Max(0, (_inlineProject.BaseImage.Width - clipboardImage.Width) / 2),
@@ -1557,7 +1972,9 @@ public partial class HistoryLibraryWindow
                 SelectOnlyInlineAnnotation(_inlineAnnotations.Count - 1);
                 SnapshotInlineSelectionForDrag();
                 _inlineResizeHandle = InlineResizeHandle.None;
+                ProtectInlineClipboardFromAutomaticWrites();
                 SaveInlineEditor();
+                RestoreInlineViewportCenter(viewportCenter.Horizontal, viewportCenter.Vertical);
                 ShowInlineSelection();
                 ToastWindow.Show(
                     "Image pasted at original size",
@@ -1688,8 +2105,8 @@ public partial class HistoryLibraryWindow
         if (preservedDisplayScale is { } displayScale)
         {
             _inlineZoomFactor = CalculateInlineZoomForDisplayScale(
-                Math.Max(1d, EditorHost.ActualWidth - 24d),
-                Math.Max(1d, EditorHost.ActualHeight - 24d),
+                Math.Max(1d, EditorHost.ActualWidth - 24d - InlineWorkspacePadding * 2),
+                Math.Max(1d, EditorHost.ActualHeight - 24d - InlineWorkspacePadding * 2),
                 transformedBase.Width,
                 transformedBase.Height,
                 displayScale);
@@ -2363,12 +2780,19 @@ public partial class HistoryLibraryWindow
 
         if (snapshot.BaseImage is not null && !string.IsNullOrWhiteSpace(_inlineProjectPath))
         {
+            double preservedDisplayScale = GetInlineDisplayScale();
             var restoredBase = new Bitmap(snapshot.BaseImage);
             EditableScreenshotService.ReplaceProjectBase(_inlineProjectPath, restoredBase, snapshot.Annotations);
             _inlineQueuedSaveJob?.BaseImage.Dispose();
             _inlineQueuedSaveJob = null;
             _inlineProject.Dispose();
             _inlineProject = new EditableScreenshotProject(restoredBase, snapshot.Annotations.ToList(), true);
+            _inlineZoomFactor = CalculateInlineZoomForDisplayScale(
+                Math.Max(1d, EditorHost.ActualWidth - 24d - InlineWorkspacePadding * 2),
+                Math.Max(1d, EditorHost.ActualHeight - 24d - InlineWorkspacePadding * 2),
+                restoredBase.Width,
+                restoredBase.Height,
+                preservedDisplayScale);
             PreviewImage.Source = BitmapToBitmapSource(restoredBase);
             _inlinePreviewAnnotations.Clear();
         }
@@ -2402,6 +2826,24 @@ public partial class HistoryLibraryWindow
         SaveInlineEditor();
     }
 
+    private void NudgeInlineSelection(int dx, int dy)
+    {
+        if (_inlineSelectedAnnotations.Count == 0)
+            return;
+
+        SnapshotInlineSelectionForDrag();
+        SnapshotInlineUndo(_inlineSelectionOriginals.Values.Any(annotation => annotation is ImageFragmentAnnotation));
+        foreach (var (index, original) in _inlineSelectionOriginals)
+        {
+            if (index >= 0 && index < _inlineAnnotations.Count)
+                _inlineAnnotations[index] = EditableScreenshotService.Translate(original, dx, dy);
+        }
+        EnsureInlineFragmentsFitCanvas();
+        SnapshotInlineSelectionForDrag();
+        SaveInlineEditor();
+        ShowInlineSelection();
+    }
+
     private bool SaveInlineEditor()
     {
         if (_inlineProject is null || FilmstripList.SelectedItem is not LibraryImageItem item)
@@ -2427,7 +2869,9 @@ public partial class HistoryLibraryWindow
             _inlineAnnotations.ToList(),
             item,
             item.Entry.FilePath,
-            sequence);
+            sequence,
+            _inlineClipboardIntentVersion,
+            _inlineClipboardSequence);
         RefreshPendingInlineAnnotations();
 
         if (!_inlineSaveLoopRunning)
@@ -2703,7 +3147,27 @@ public partial class HistoryLibraryWindow
             return;
         }
 
-        ClipboardService.CopyPreparedImageToClipboard(result.ClipboardBitmap, result.ClipboardPayload);
+        // Only refresh the clipboard while it still holds our own automatic copy;
+        // anything copied since then (here or in another app) wins.
+        if (job.ClipboardIntentVersion == _inlineClipboardIntentVersion &&
+            !_inlineClipboardProtected &&
+            ClipboardService.GetClipboardSequenceNumberSafe() == job.ClipboardSequence)
+        {
+            if (_inlineAutomaticClipboardToken is null ||
+                (ClipboardService.TryGetClipboardToken(out var token) &&
+                 string.Equals(token, _inlineAutomaticClipboardToken, StringComparison.Ordinal)))
+            {
+                string clipboardToken = Guid.NewGuid().ToString("N");
+                ClipboardService.CopyPreparedImageToClipboard(result.ClipboardBitmap, result.ClipboardPayload, clipboardToken);
+                _inlineAutomaticClipboardToken = clipboardToken;
+                _inlineClipboardSequence = ClipboardService.GetClipboardSequenceNumberSafe();
+            }
+            else
+            {
+                _inlineClipboardProtected = true;
+                _inlineAutomaticClipboardToken = null;
+            }
+        }
 
         if (InlineTextEditor.Visibility == Visibility.Visible)
         {
@@ -2745,7 +3209,9 @@ public partial class HistoryLibraryWindow
         List<Annotation> Annotations,
         LibraryImageItem Item,
         string FilePath,
-        long Sequence);
+        long Sequence,
+        long ClipboardIntentVersion,
+        uint ClipboardSequence);
 
     private sealed class InlineSaveOperation(InlineSaveJob job, Task<InlineSaveResult> task)
     {
@@ -2782,6 +3248,12 @@ public partial class HistoryLibraryWindow
                    ScreenshotCaptureMode.Crop or
                    ScreenshotCaptureMode.CopyRegion or
                    ScreenshotCaptureMode.CanvasResize;
+
+    private static bool IsInlineDrawingTool(ScreenshotCaptureMode mode)
+        => mode != ScreenshotCaptureMode.Select &&
+           mode != ScreenshotCaptureMode.CopyRegion &&
+           mode != ScreenshotCaptureMode.Crop &&
+           mode != ScreenshotCaptureMode.CanvasResize;
 
     private bool TryGetInlineImagePoint(
         System.Windows.Point viewportPoint,
@@ -2824,7 +3296,7 @@ public partial class HistoryLibraryWindow
         double scale = GetInlineDisplayScale();
         double width = _inlineProject.BaseImage.Width * scale;
         double height = _inlineProject.BaseImage.Height * scale;
-        return new Rect(0d, 0d, width, height);
+        return new Rect(InlineWorkspacePadding, InlineWorkspacePadding, width, height);
     }
 
     private double GetInlineDisplayScale()
@@ -2832,8 +3304,8 @@ public partial class HistoryLibraryWindow
         if (_inlineProject is null)
             return 1d;
         return CalculateInlineDisplayScale(
-            Math.Max(1d, EditorHost.ActualWidth - 24d),
-            Math.Max(1d, EditorHost.ActualHeight - 24d),
+            Math.Max(1d, EditorHost.ActualWidth - 24d - InlineWorkspacePadding * 2),
+            Math.Max(1d, EditorHost.ActualHeight - 24d - InlineWorkspacePadding * 2),
             _inlineProject.BaseImage.Width,
             _inlineProject.BaseImage.Height,
             _inlineZoomFactor);
@@ -2849,7 +3321,7 @@ public partial class HistoryLibraryWindow
         if (viewportWidth <= 0d || viewportHeight <= 0d || imageWidth <= 0 || imageHeight <= 0)
             return 1d;
         double fitScale = Math.Min(viewportWidth / imageWidth, viewportHeight / imageHeight);
-        return Math.Max(0.01d, fitScale) * Math.Clamp(zoomFactor, 0.05d, 4d);
+        return Math.Max(0.01d, fitScale) * Math.Max(0.05d, zoomFactor);
     }
 
     internal static double CalculateInlineZoomForDisplayScale(
@@ -2862,7 +3334,7 @@ public partial class HistoryLibraryWindow
         if (viewportWidth <= 0d || viewportHeight <= 0d || imageWidth <= 0 || imageHeight <= 0)
             return 1d;
         double fitScale = Math.Min(viewportWidth / imageWidth, viewportHeight / imageHeight);
-        return Math.Clamp(desiredDisplayScale / Math.Max(0.01d, fitScale), 0.05d, 4d);
+        return Math.Max(0.05d, desiredDisplayScale / Math.Max(0.01d, fitScale));
     }
 
     internal static double CalculateInlineZoom(double currentZoom, int wheelDelta)
@@ -2871,24 +3343,32 @@ public partial class HistoryLibraryWindow
             0.05d,
             4d);
 
+    // The viewport center is kept in image pixels so it survives canvas growth and zoom.
     private (double Horizontal, double Vertical) CaptureInlineViewportCenter()
-        => (
-            EditorScrollViewer.ExtentWidth <= 0d
-                ? 0.5d
-                : (EditorScrollViewer.HorizontalOffset + EditorScrollViewer.ViewportWidth / 2d) / EditorScrollViewer.ExtentWidth,
-            EditorScrollViewer.ExtentHeight <= 0d
-                ? 0.5d
-                : (EditorScrollViewer.VerticalOffset + EditorScrollViewer.ViewportHeight / 2d) / EditorScrollViewer.ExtentHeight);
+    {
+        if (_inlineProject is null)
+            return (0d, 0d);
+
+        var rect = GetInlineDisplayRect();
+        double scale = Math.Max(0.01d, GetInlineDisplayScale());
+        double horizontal = (EditorScrollViewer.HorizontalOffset + EditorScrollViewer.ViewportWidth / 2d - rect.Left) / scale;
+        double vertical = (EditorScrollViewer.VerticalOffset + EditorScrollViewer.ViewportHeight / 2d - rect.Top) / scale;
+        return (
+            Math.Clamp(horizontal, 0d, _inlineProject.BaseImage.Width),
+            Math.Clamp(vertical, 0d, _inlineProject.BaseImage.Height));
+    }
 
     private void RestoreInlineViewportCenter(double horizontalCenter, double verticalCenter)
     {
         _ = Dispatcher.BeginInvoke(() =>
         {
             EditorScrollViewer.UpdateLayout();
+            var rect = GetInlineDisplayRect();
+            double scale = Math.Max(0.01d, GetInlineDisplayScale());
             EditorScrollViewer.ScrollToHorizontalOffset(
-                Math.Max(0d, horizontalCenter * EditorScrollViewer.ExtentWidth - EditorScrollViewer.ViewportWidth / 2d));
+                Math.Max(0d, rect.Left + horizontalCenter * scale - EditorScrollViewer.ViewportWidth / 2d));
             EditorScrollViewer.ScrollToVerticalOffset(
-                Math.Max(0d, verticalCenter * EditorScrollViewer.ExtentHeight - EditorScrollViewer.ViewportHeight / 2d));
+                Math.Max(0d, rect.Top + verticalCenter * scale - EditorScrollViewer.ViewportHeight / 2d));
         }, DispatcherPriority.Loaded);
     }
 
@@ -2902,10 +3382,16 @@ public partial class HistoryLibraryWindow
         }
 
         var viewportCenter = CaptureInlineViewportCenter();
-        double zoom = CalculateInlineZoom(_inlineZoomFactor, e.Delta);
-        if (Math.Abs(zoom - _inlineZoomFactor) < 0.0001d)
+        double displayScale = GetInlineDisplayScale();
+        double zoom = CalculateInlineZoom(displayScale, e.Delta);
+        if (Math.Abs(zoom - displayScale) < 0.0001d)
             return;
-        _inlineZoomFactor = zoom;
+        _inlineZoomFactor = CalculateInlineZoomForDisplayScale(
+            Math.Max(1d, EditorHost.ActualWidth - 24d - InlineWorkspacePadding * 2),
+            Math.Max(1d, EditorHost.ActualHeight - 24d - InlineWorkspacePadding * 2),
+            _inlineProject.BaseImage.Width,
+            _inlineProject.BaseImage.Height,
+            zoom);
         RefreshInlineViewportGeometry();
         RestoreInlineViewportCenter(viewportCenter.Horizontal, viewportCenter.Vertical);
         e.Handled = true;
@@ -2940,10 +3426,11 @@ public partial class HistoryLibraryWindow
         }
 
         var rect = GetInlineDisplayRect();
-        EditorViewport.Width = Math.Max(1d, rect.Width);
-        EditorViewport.Height = Math.Max(1d, rect.Height);
+        EditorViewport.Width = Math.Max(1d, rect.Right + InlineWorkspacePadding);
+        EditorViewport.Height = Math.Max(1d, rect.Bottom + InlineWorkspacePadding);
         PreviewImage.Width = Math.Max(1d, rect.Width);
         PreviewImage.Height = Math.Max(1d, rect.Height);
+        PreviewImage.Margin = new Thickness(rect.Left, rect.Top, 0, 0);
     }
 
     private double ToInlineWpfFontSize(float pointSize)
@@ -2967,8 +3454,8 @@ public partial class HistoryLibraryWindow
         InlineTextEditor.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
         InlineTextEditor.VerticalAlignment = System.Windows.VerticalAlignment.Top;
         InlineTextEditor.Margin = new Thickness(screen.X, screen.Y, 0, 0);
-        InlineTextEditor.Width = Math.Max(80, Math.Min(bottomRight.X - screen.X, surface.Width - screen.X - 8));
-        InlineTextEditor.Height = Math.Max(42, Math.Min(bottomRight.Y - screen.Y, surface.Height - screen.Y - 8));
+        InlineTextEditor.Width = Math.Max(80, Math.Min(bottomRight.X - screen.X, surface.Right - screen.X - 8));
+        InlineTextEditor.Height = Math.Max(42, Math.Min(bottomRight.Y - screen.Y, surface.Bottom - screen.Y - 8));
     }
 
     private void PositionInlineStepEditor(DrawingPoint point)
@@ -2978,8 +3465,8 @@ public partial class HistoryLibraryWindow
         InlineStepEditor.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
         InlineStepEditor.VerticalAlignment = System.Windows.VerticalAlignment.Top;
         InlineStepEditor.Margin = new Thickness(
-            Math.Clamp(center.X - InlineStepEditor.Width / 2d, 0d, Math.Max(0d, surface.Width - InlineStepEditor.Width)),
-            Math.Clamp(center.Y - InlineStepEditor.Height / 2d, 0d, Math.Max(0d, surface.Height - InlineStepEditor.Height)),
+            Math.Clamp(center.X - InlineStepEditor.Width / 2d, surface.Left, Math.Max(surface.Left, surface.Right - InlineStepEditor.Width)),
+            Math.Clamp(center.Y - InlineStepEditor.Height / 2d, surface.Top, Math.Max(surface.Top, surface.Bottom - InlineStepEditor.Height)),
             0,
             0);
     }
@@ -3342,6 +3829,19 @@ public partial class HistoryLibraryWindow
         }
         if (_inlineDraggingSelection)
         {
+            if (_inlineResizeHandle is InlineResizeHandle.PathFrom or InlineResizeHandle.PathTo &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is ArrowAnnotation or LineAnnotation)
+            {
+                var resizedPath = ResizeInlinePath(_inlineSelectionOriginal, _inlineDragCurrent, _inlineResizeHandle);
+                if (resizedPath is not null)
+                {
+                    AddPendingInlineAnnotation(resizedPath, EditorCanvas);
+                    ShowInlinePathSelection(resizedPath, 0, 0);
+                }
+                return;
+            }
+
             AddInlineSelectionDragPreview();
             if (_inlineResizeHandle == InlineResizeHandle.TextRight &&
                 _inlineSelectionOriginal is TextAnnotation text)
@@ -3355,7 +3855,11 @@ public partial class HistoryLibraryWindow
                 _inlineSelectionOriginal is ImageFragmentAnnotation fragment)
             {
                 ShowInlineSelection(
-                    ResizeInlineHighlight(fragment.Rect, _inlineDragCurrent, _inlineResizeHandle),
+                    ResizeInlineHighlight(
+                        fragment.Rect,
+                        _inlineDragCurrent,
+                        _inlineResizeHandle,
+                        Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)),
                     clearPreview: false);
             }
             else if (_inlineResizeHandle != InlineResizeHandle.None &&
@@ -3364,6 +3868,26 @@ public partial class HistoryLibraryWindow
             {
                 ShowInlineSelection(
                     ResizeInlineHighlight(highlight.Rect, _inlineDragCurrent, _inlineResizeHandle),
+                    clearPreview: false);
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is RectShapeAnnotation rectangle)
+            {
+                ShowInlineSelection(
+                    ResizeInlineHighlight(
+                        rectangle.Rect,
+                        _inlineDragCurrent,
+                        _inlineResizeHandle,
+                        Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)),
+                    clearPreview: false);
+            }
+            else if (_inlineResizeHandle != InlineResizeHandle.None &&
+                _inlineSelectedAnnotations.Count == 1 &&
+                _inlineSelectionOriginal is CircleShapeAnnotation circle)
+            {
+                ShowInlineSelection(
+                    ResizeInlineHighlight(circle.Rect, _inlineDragCurrent, _inlineResizeHandle, preserveAspect: true),
                     clearPreview: false);
             }
             else
@@ -3475,7 +3999,11 @@ public partial class HistoryLibraryWindow
             {
                 preview = fragment with
                 {
-                    Rect = ResizeInlineHighlight(fragment.Rect, _inlineDragCurrent, _inlineResizeHandle)
+                    Rect = ResizeInlineHighlight(
+                        fragment.Rect,
+                        _inlineDragCurrent,
+                        _inlineResizeHandle,
+                        Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
                 };
             }
             else if (index == _inlineSelectedAnnotation &&
@@ -3485,6 +4013,28 @@ public partial class HistoryLibraryWindow
                 preview = highlight with
                 {
                     Rect = ResizeInlineHighlight(highlight.Rect, _inlineDragCurrent, _inlineResizeHandle)
+                };
+            }
+            else if (index == _inlineSelectedAnnotation &&
+                     _inlineResizeHandle != InlineResizeHandle.None &&
+                     original is RectShapeAnnotation rectangle)
+            {
+                preview = rectangle with
+                {
+                    Rect = ResizeInlineHighlight(
+                        rectangle.Rect,
+                        _inlineDragCurrent,
+                        _inlineResizeHandle,
+                        Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+                };
+            }
+            else if (index == _inlineSelectedAnnotation &&
+                     _inlineResizeHandle != InlineResizeHandle.None &&
+                     original is CircleShapeAnnotation circle)
+            {
+                preview = circle with
+                {
+                    Rect = ResizeInlineHighlight(circle.Rect, _inlineDragCurrent, _inlineResizeHandle, preserveAspect: true)
                 };
             }
             else
@@ -3498,36 +4048,72 @@ public partial class HistoryLibraryWindow
 
     private DrawingPoint GetClampedInlineSelectionTranslation(int requestedDx, int requestedDy)
     {
-        if (_inlineProject is null)
-            return new DrawingPoint(requestedDx, requestedDy);
-
-        int minimumDx = int.MinValue;
-        int maximumDx = int.MaxValue;
-        int minimumDy = int.MinValue;
-        int maximumDy = int.MaxValue;
-        bool hasFragment = false;
-        foreach (int index in _inlineSelectedAnnotations)
+        if (_inlineSelectedAnnotations.Count == 1 && _inlineSelectionOriginal is TextAnnotation text)
         {
-            var original = _inlineSelectionOriginals.TryGetValue(index, out var snapshot)
-                ? snapshot
-                : index >= 0 && index < _inlineAnnotations.Count
-                    ? _inlineAnnotations[index]
-                    : null;
-            if (original is not ImageFragmentAnnotation fragment)
-                continue;
+            var bounds = GetInlineTextFrameBounds(text);
+            return new DrawingPoint(Math.Max(requestedDx, -bounds.Left), Math.Max(requestedDy, -bounds.Top));
+        }
+        return new DrawingPoint(requestedDx, requestedDy);
+    }
 
-            hasFragment = true;
-            minimumDx = Math.Max(minimumDx, -fragment.Rect.Left);
-            maximumDx = Math.Min(maximumDx, _inlineProject.BaseImage.Width - fragment.Rect.Right);
-            minimumDy = Math.Max(minimumDy, -fragment.Rect.Top);
-            maximumDy = Math.Min(maximumDy, _inlineProject.BaseImage.Height - fragment.Rect.Bottom);
+    // Image fragments may be dragged past the canvas edge; grow the canvas
+    // (shifting everything when they leave the top or left) so nothing is cut off.
+    private void EnsureInlineFragmentsFitCanvas()
+    {
+        if (_inlineProject is null || !_inlineAnnotations.Any(annotation => annotation is ImageFragmentAnnotation))
+            return;
+
+        var fragments = _inlineAnnotations.OfType<ImageFragmentAnnotation>().ToArray();
+        int left = Math.Min(0, fragments.Min(fragment => fragment.Rect.Left));
+        int top = Math.Min(0, fragments.Min(fragment => fragment.Rect.Top));
+        int offsetX = -left;
+        int offsetY = -top;
+        int right = fragments.Max(fragment => fragment.Rect.Right) + offsetX;
+        int bottom = fragments.Max(fragment => fragment.Rect.Bottom) + offsetY;
+        int width = Math.Max(_inlineProject.BaseImage.Width + offsetX, right);
+        int height = Math.Max(_inlineProject.BaseImage.Height + offsetY, bottom);
+        if (offsetX == 0 &&
+            offsetY == 0 &&
+            width == _inlineProject.BaseImage.Width &&
+            height == _inlineProject.BaseImage.Height)
+        {
+            return;
         }
 
-        if (!hasFragment || minimumDx > maximumDx || minimumDy > maximumDy)
-            return new DrawingPoint(requestedDx, requestedDy);
-        return new DrawingPoint(
-            Math.Clamp(requestedDx, minimumDx, maximumDx),
-            Math.Clamp(requestedDy, minimumDy, maximumDy));
+        Bitmap? expanded = null;
+        try
+        {
+            double preservedDisplayScale = GetInlineDisplayScale();
+            var viewportCenter = CaptureInlineViewportCenter();
+            expanded = new Bitmap(Math.Max(1, width), Math.Max(1, height), DrawingPixelFormat.Format32bppArgb);
+            using (var graphics = Graphics.FromImage(expanded))
+            {
+                graphics.Clear(DrawingColor.White);
+                graphics.DrawImageUnscaled(_inlineProject.BaseImage, offsetX, offsetY);
+            }
+
+            var annotations = _inlineAnnotations
+                .Select(annotation => EditableScreenshotService.Translate(annotation, offsetX, offsetY))
+                .ToList();
+            ReplaceInlineBaseTransform(
+                expanded,
+                annotations,
+                save: false,
+                preservedDisplayScale: preservedDisplayScale,
+                clearSelection: false);
+            expanded = null;
+            SnapshotInlineSelectionForDrag();
+            RestoreInlineViewportCenter(viewportCenter.Horizontal + offsetX, viewportCenter.Vertical + offsetY);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogError("library.inline-editor.expand-fragment-canvas", ex);
+            ToastWindow.ShowError("Canvas expansion failed", ex.Message);
+        }
+        finally
+        {
+            expanded?.Dispose();
+        }
     }
 
     private void ShowInlineSelection(
@@ -3538,6 +4124,7 @@ public partial class HistoryLibraryWindow
     {
         if (clearPreview)
             ClearInlinePreview();
+        ShowInlinePixelSelection();
         if (_inlineSelectedAnnotations.Count == 0)
             return;
 
@@ -3568,7 +4155,8 @@ public partial class HistoryLibraryWindow
             Canvas.SetTop(selection, topLeft.Y);
             EditorCanvas.Children.Add(selection);
 
-            if (_inlineSelectedAnnotations.Count == 1 && selected is HighlightAnnotation or ImageFragmentAnnotation)
+            if (_inlineSelectedAnnotations.Count == 1 &&
+                selected is HighlightAnnotation or ImageFragmentAnnotation or RectShapeAnnotation or CircleShapeAnnotation)
             {
                 AddInlineResizeHandle(topLeft.X, topLeft.Y);
                 AddInlineResizeHandle(bottomRight.X, topLeft.Y);
@@ -3611,9 +4199,34 @@ public partial class HistoryLibraryWindow
         }
         EditorCanvas.Children.Add(outline);
 
-        AddInlinePathEndpoint(outline.Points[0]);
-        AddInlinePathEndpoint(outline.Points[^1]);
+        if (selected is ArrowAnnotation or LineAnnotation)
+        {
+            AddInlinePathEndpoint(outline.Points[0]);
+            AddInlinePathEndpoint(outline.Points[^1]);
+        }
         return true;
+    }
+
+    private void ShowInlinePixelSelection()
+    {
+        if (_inlinePixelSelection is not { Width: > 0, Height: > 0 } selection)
+            return;
+
+        var topLeft = ToInlineViewportPoint(selection.Location);
+        var bottomRight = ToInlineViewportPoint(new DrawingPoint(selection.Right, selection.Bottom));
+        var outline = new System.Windows.Shapes.Rectangle
+        {
+            Width = Math.Max(1, bottomRight.X - topLeft.X),
+            Height = Math.Max(1, bottomRight.Y - topLeft.Y),
+            Stroke = new SolidColorBrush(MediaColor.FromRgb(37, 99, 235)),
+            StrokeThickness = 2,
+            StrokeDashArray = [5, 3],
+            Fill = new SolidColorBrush(MediaColor.FromArgb(20, 37, 99, 235)),
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(outline, topLeft.X);
+        Canvas.SetTop(outline, topLeft.Y);
+        EditorCanvas.Children.Add(outline);
     }
 
     private void AddInlinePathEndpoint(System.Windows.Point point)
@@ -3758,6 +4371,26 @@ public partial class HistoryLibraryWindow
         }
 
         int tolerance = Math.Max(6, (int)Math.Ceiling(8d / Math.Max(0.05, GetInlineDisplayScale())));
+        if (_inlineAnnotations[_inlineSelectedAnnotation] is ArrowAnnotation or LineAnnotation)
+        {
+            (InlineResizeHandle Handle, DrawingPoint Point)[] endpoints = _inlineAnnotations[_inlineSelectedAnnotation] switch
+            {
+                ArrowAnnotation arrow => [(InlineResizeHandle.PathFrom, arrow.From), (InlineResizeHandle.PathTo, arrow.To)],
+                LineAnnotation line => [(InlineResizeHandle.PathFrom, line.From), (InlineResizeHandle.PathTo, line.To)],
+                _ => []
+            };
+            foreach (var candidate in endpoints)
+            {
+                if (Math.Abs(point.X - candidate.Point.X) <= tolerance &&
+                    Math.Abs(point.Y - candidate.Point.Y) <= tolerance)
+                {
+                    handle = candidate.Handle;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         if (_inlineAnnotations[_inlineSelectedAnnotation] is TextAnnotation text)
         {
             var bounds = GetInlineTextFrameBounds(text);
@@ -3775,6 +4408,8 @@ public partial class HistoryLibraryWindow
         {
             HighlightAnnotation highlight => highlight.Rect,
             ImageFragmentAnnotation fragment => fragment.Rect,
+            RectShapeAnnotation rectangle => rectangle.Rect,
+            CircleShapeAnnotation circle => circle.Rect,
             _ => DrawingRectangle.Empty
         };
         if (resizeBounds.IsEmpty)
@@ -3807,6 +4442,7 @@ public partial class HistoryLibraryWindow
         InlineResizeHandle.CanvasLeft or InlineResizeHandle.CanvasRight => WpfCursors.SizeWE,
         InlineResizeHandle.CanvasTop or InlineResizeHandle.CanvasBottom => WpfCursors.SizeNS,
         InlineResizeHandle.TextRight => WpfCursors.SizeWE,
+        InlineResizeHandle.PathFrom or InlineResizeHandle.PathTo => WpfCursors.Cross,
         _ => WpfCursors.SizeAll
     };
 
@@ -3872,9 +4508,15 @@ public partial class HistoryLibraryWindow
         int canvasWidth,
         int canvasHeight,
         DrawingRectangle bounds)
-        => new(
-            Math.Max(canvasWidth, Math.Max(1, bounds.Right)),
-            Math.Max(canvasHeight, Math.Max(1, bounds.Bottom)));
+    {
+        var offset = CalculateInlineCanvasExpansionOffset(bounds);
+        return new(
+            Math.Max(canvasWidth + offset.X, Math.Max(1, bounds.Right + offset.X)),
+            Math.Max(canvasHeight + offset.Y, Math.Max(1, bounds.Bottom + offset.Y)));
+    }
+
+    internal static DrawingPoint CalculateInlineCanvasExpansionOffset(DrawingRectangle bounds)
+        => new(Math.Max(0, -bounds.Left), Math.Max(0, -bounds.Top));
 
     internal static int CalculateInlineTextMaxWidthFromHandle(int textX, int handleX, int maximumWidth)
         => Math.Clamp(
@@ -3885,7 +4527,8 @@ public partial class HistoryLibraryWindow
     private DrawingRectangle ResizeInlineHighlight(
         DrawingRectangle original,
         DrawingPoint draggedPoint,
-        InlineResizeHandle handle)
+        InlineResizeHandle handle,
+        bool preserveAspect = false)
     {
         int left = handle is InlineResizeHandle.TopLeft or InlineResizeHandle.BottomLeft
             ? draggedPoint.X
@@ -3900,12 +4543,35 @@ public partial class HistoryLibraryWindow
             ? draggedPoint.Y
             : original.Bottom;
 
-        if (_inlineProject is not null)
+        if (preserveAspect)
         {
-            left = Math.Clamp(left, 0, _inlineProject.BaseImage.Width);
-            right = Math.Clamp(right, 0, _inlineProject.BaseImage.Width);
-            top = Math.Clamp(top, 0, _inlineProject.BaseImage.Height);
-            bottom = Math.Clamp(bottom, 0, _inlineProject.BaseImage.Height);
+            int width = Math.Abs(right - left);
+            int height = Math.Abs(bottom - top);
+            double aspect = original.Height > 0 ? (double)original.Width / original.Height : 1d;
+            if (width <= 0 && height > 0)
+            {
+                width = Math.Max(1, (int)Math.Round(height * aspect));
+            }
+            else if (height <= 0 && width > 0)
+            {
+                height = Math.Max(1, (int)Math.Round(width / Math.Max(0.01d, aspect)));
+            }
+            else if (width > 0 && height > 0)
+            {
+                if (width / Math.Max(1d, height) > aspect)
+                    width = Math.Max(1, (int)Math.Round(height * aspect));
+                else
+                    height = Math.Max(1, (int)Math.Round(width / Math.Max(0.01d, aspect)));
+            }
+
+            if (handle is InlineResizeHandle.TopLeft or InlineResizeHandle.BottomLeft)
+                left = right - width;
+            else
+                right = left + width;
+            if (handle is InlineResizeHandle.TopLeft or InlineResizeHandle.TopRight)
+                top = bottom - height;
+            else
+                bottom = top + height;
         }
         return DrawingRectangle.FromLTRB(
             Math.Min(left, right),
@@ -3913,6 +4579,17 @@ public partial class HistoryLibraryWindow
             Math.Max(left, right),
             Math.Max(top, bottom));
     }
+
+    private static Annotation? ResizeInlinePath(Annotation? annotation, DrawingPoint draggedPoint, InlineResizeHandle handle)
+        => ResizeInlinePath(annotation, draggedPoint, handle == InlineResizeHandle.PathFrom);
+
+    internal static Annotation? ResizeInlinePath(Annotation? annotation, DrawingPoint draggedPoint, bool fromEndpoint)
+        => annotation switch
+        {
+            ArrowAnnotation arrow => fromEndpoint ? arrow with { From = draggedPoint } : arrow with { To = draggedPoint },
+            LineAnnotation line => fromEndpoint ? line with { From = draggedPoint } : line with { To = draggedPoint },
+            _ => null
+        };
 
     private void ClearInlinePreview() => EditorCanvas.Children.Clear();
 
@@ -4030,6 +4707,21 @@ public partial class HistoryLibraryWindow
         _ => DrawingRectangle.Empty
     };
 
+    private static DrawingRectangle GetInlineAnnotationsBounds(IEnumerable<Annotation> annotations)
+    {
+        var bounds = DrawingRectangle.Empty;
+        foreach (var annotation in annotations)
+        {
+            var annotationBounds = GetInlineAnnotationBounds(annotation);
+            if (annotationBounds.Width <= 0 || annotationBounds.Height <= 0)
+                continue;
+            bounds = bounds.Width <= 0 || bounds.Height <= 0
+                ? annotationBounds
+                : DrawingRectangle.Union(bounds, annotationBounds);
+        }
+        return bounds;
+    }
+
     private static bool IsInlineTextContentHit(TextAnnotation text, DrawingPoint point)
         => MeasureInlineTextContent(text).Contains(point);
 
@@ -4089,6 +4781,13 @@ public partial class HistoryLibraryWindow
             Math.Min(first.Y, second.Y),
             Math.Abs(second.X - first.X),
             Math.Abs(second.Y - first.Y));
+
+    private DrawingRectangle IntersectInlineImageBounds(DrawingRectangle requested)
+        => _inlineProject is null
+            ? DrawingRectangle.Empty
+            : DrawingRectangle.Intersect(
+                requested,
+                new DrawingRectangle(0, 0, _inlineProject.BaseImage.Width, _inlineProject.BaseImage.Height));
 
     private static BitmapSource BitmapToBitmapSource(Bitmap bitmap, int decodePixelWidth = 0)
     {

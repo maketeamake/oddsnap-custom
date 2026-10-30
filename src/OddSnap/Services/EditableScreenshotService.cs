@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -17,8 +18,14 @@ namespace OddSnap.Services;
 public static class EditableScreenshotService
 {
     private const int CurrentVersion = 1;
+    private const int MaxClipboardAnnotationCount = 256;
+    private const int MaxClipboardPointCount = 20_000;
+    private const int MaxClipboardJsonBytes = 4 * 1024 * 1024;
+    private const int MaxClipboardPngBytes = 16 * 1024 * 1024;
+    private const int MaxClipboardCoordinate = 1_000_000;
+    private const long MaxClipboardPixels = 12_000_000;
     private static readonly string ProjectDirectory = Path.Combine(HistoryService.HistoryDir, "cache", "projects");
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, MaxDepth = 32 };
 
     public static EditableScreenshotProject Load(string imagePath)
     {
@@ -128,6 +135,115 @@ public static class EditableScreenshotService
         var (projectPath, basePath) = GetProjectPaths(imagePath);
         TryDelete(projectPath);
         TryDelete(basePath);
+    }
+
+    internal static string SerializeAnnotations(IReadOnlyList<Annotation> annotations)
+    {
+        ArgumentNullException.ThrowIfNull(annotations);
+        if (annotations.Count > MaxClipboardAnnotationCount)
+            throw new ArgumentOutOfRangeException(nameof(annotations));
+
+        return JsonSerializer.Serialize(annotations.Select(ToStored).ToList(), JsonOptions);
+    }
+
+    internal static bool TryDeserializeAnnotations(string? json, out List<Annotation> annotations)
+    {
+        annotations = new List<Annotation>();
+        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxClipboardJsonBytes)
+            return false;
+
+        try
+        {
+            var stored = JsonSerializer.Deserialize<List<StoredAnnotation>>(json, JsonOptions);
+            if (stored is null || stored.Count == 0 || stored.Count > MaxClipboardAnnotationCount)
+                return false;
+
+            foreach (var value in stored)
+            {
+                if (!IsSafeClipboardAnnotation(value))
+                    return false;
+            }
+
+            var restored = stored.Select(FromStored).ToList();
+            foreach (var fragment in restored.OfType<ImageFragmentAnnotation>())
+            {
+                if (fragment.PngData.Length > MaxClipboardPngBytes)
+                    return false;
+
+                using var stream = new MemoryStream(fragment.PngData, writable: false);
+                using var bitmap = new Bitmap(stream);
+                if (bitmap.Width <= 0 || bitmap.Height <= 0 || (long)bitmap.Width * bitmap.Height > MaxClipboardPixels)
+                    return false;
+            }
+
+            annotations = restored;
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or ArgumentException
+            or NotSupportedException or OverflowException or OutOfMemoryException)
+        {
+            AppDiagnostics.LogWarning("editable-project.clipboard", "Rejected invalid editable clipboard payload.", ex);
+            return false;
+        }
+    }
+
+    internal static List<Annotation> CloneAnnotations(IReadOnlyList<Annotation> annotations)
+    {
+        ArgumentNullException.ThrowIfNull(annotations);
+        return annotations.Select(annotation => FromStored(ToStored(annotation))).ToList();
+    }
+
+    private static bool IsSafeClipboardAnnotation(StoredAnnotation value)
+    {
+        if (value is null || string.IsNullOrWhiteSpace(value.Kind))
+            return false;
+        if (value.Points is { Count: > MaxClipboardPointCount }
+            || value.Points?.Any(point => point is null
+                || point.X is < -MaxClipboardCoordinate or > MaxClipboardCoordinate
+                || point.Y is < -MaxClipboardCoordinate or > MaxClipboardCoordinate) == true)
+            return false;
+        if (value.Data is { Length: > MaxClipboardPngBytes })
+            return false;
+        if (value.Width < 0 || value.Height < 0
+            || value.Width > MaxClipboardCoordinate || value.Height > MaxClipboardCoordinate
+            || (long)value.Width * value.Height > MaxClipboardPixels
+            || value.X1 is < -MaxClipboardCoordinate or > MaxClipboardCoordinate
+            || value.Y1 is < -MaxClipboardCoordinate or > MaxClipboardCoordinate
+            || value.X2 is < -MaxClipboardCoordinate or > MaxClipboardCoordinate
+            || value.Y2 is < -MaxClipboardCoordinate or > MaxClipboardCoordinate)
+            return false;
+
+        bool validSize = float.IsFinite(value.Size) && value.Size is > 0f and <= 1024f;
+        bool validText = value.Text != null && value.Text.Length <= 100_000;
+        if (value.FontFamily != null && value.FontFamily.Length > 256)
+            return false;
+        if (value.Kind == "imageFragment" && (value.Data is not { Length: > 0 } || !HasSafePngDimensions(value.Data)))
+            return false;
+
+        return value.Kind switch
+        {
+            "draw" or "curvedArrow" => value.Points is { Count: >= 2 },
+            "blur" or "rect" or "highlight" or "circle" or "eraser" => value.Width > 0 && value.Height > 0,
+            "line" or "arrow" or "ruler" => true,
+            "step" => value.Number is >= 1 and <= 9999,
+            "text" => validText && validSize,
+            "magnifier" => value.Width > 0 && value.Height > 0,
+            "emoji" => value.Text != null && value.Text.Length <= 1000 && validSize,
+            "imageFragment" => value.Width > 0 && value.Height > 0,
+            _ => false
+        };
+    }
+
+    private static bool HasSafePngDimensions(byte[] data)
+    {
+        if (data.Length < 24
+            || !data.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })
+            || !data.AsSpan(12, 4).SequenceEqual("IHDR"u8))
+            return false;
+
+        int width = BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(16, 4));
+        int height = BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(20, 4));
+        return width > 0 && height > 0 && (long)width * height <= MaxClipboardPixels;
     }
 
     private static (string ProjectPath, string BasePath) GetProjectPaths(string imagePath)

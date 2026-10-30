@@ -2,12 +2,18 @@ using System.Collections.Specialized;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
+using OddSnap.Models;
 
 namespace OddSnap.Services;
 
 public static class ClipboardService
 {
+    public const string EditableAnnotationsFormat = "OddSnap.EditableAnnotations.v1";
+    public const string AutomaticClipboardTokenFormat = "OddSnap.AutomaticClipboardToken.v1";
     private const long MaxPngClipboardPixels = 12_000_000;
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
 
     public sealed class ImageClipboardPayload
     {
@@ -43,26 +49,89 @@ public static class ClipboardService
         return new ImageClipboardPayload(pngBytes, existingFilePath);
     }
 
-    public static void CopyPreparedImageToClipboard(Bitmap bitmap, ImageClipboardPayload payload)
+    public static void CopyPreparedImageToClipboard(
+        Bitmap bitmap,
+        ImageClipboardPayload payload,
+        string? automaticClipboardToken = null)
+        => SetClipboardWithRetry(CreateImageDataObject(bitmap, payload, automaticClipboardToken));
+
+    public static void CopyAnnotationsToClipboard(
+        Bitmap bitmap,
+        IReadOnlyList<Annotation> annotations,
+        string? filePath = null)
     {
-        var dataObject = new System.Windows.Forms.DataObject();
+        ArgumentNullException.ThrowIfNull(bitmap);
+        ArgumentNullException.ThrowIfNull(annotations);
 
-        dataObject.SetData(System.Windows.Forms.DataFormats.Bitmap, bitmap);
-
-        if (payload.PngBytes is { } pngBytes && pngBytes.Array is not null && pngBytes.Count > 0)
+        var payload = PrepareImageClipboardPayload(bitmap, filePath);
+        var dataObject = CreateImageDataObject(bitmap, payload, automaticClipboardToken: null);
+        try
         {
-            dataObject.SetData(
-                "PNG",
-                false,
-                new MemoryStream(pngBytes.Array, pngBytes.Offset, pngBytes.Count, writable: false, publiclyVisible: true));
+            var json = EditableScreenshotService.SerializeAnnotations(annotations);
+            if (json.Length <= 4 * 1024 * 1024)
+                dataObject.SetData(EditableAnnotationsFormat, false, json);
         }
-
-        if (!string.IsNullOrWhiteSpace(payload.FilePath) && File.Exists(payload.FilePath))
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
         {
-            dataObject.SetFileDropList(new StringCollection { payload.FilePath });
+            AppDiagnostics.LogWarning(
+                "clipboard.copy-annotations",
+                "Editable clipboard payload was omitted; bitmap copy remains available.",
+                ex);
         }
 
         SetClipboardWithRetry(dataObject);
+    }
+
+    public static bool TryGetAnnotationsFromClipboard(out List<Annotation> annotations)
+    {
+        annotations = new List<Annotation>();
+        try
+        {
+            if (!System.Windows.Forms.Clipboard.TryGetData<string>(EditableAnnotationsFormat, out var json))
+                return false;
+
+            return EditableScreenshotService.TryDeserializeAnnotations(json, out annotations);
+        }
+        catch (ExternalException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogWarning("clipboard.read-annotations", "Failed to read editable clipboard data.", ex);
+            return false;
+        }
+    }
+
+    public static bool TryGetClipboardToken(out string? token)
+    {
+        token = null;
+        try
+        {
+            if (!System.Windows.Forms.Clipboard.TryGetData<string>(AutomaticClipboardTokenFormat, out var value))
+                return false;
+
+            token = value;
+            return !string.IsNullOrWhiteSpace(token);
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogWarning("clipboard.read-token", "Failed to inspect clipboard ownership.", ex);
+            return false;
+        }
+    }
+
+    public static uint GetClipboardSequenceNumberSafe()
+    {
+        try
+        {
+            return GetClipboardSequenceNumber();
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.LogWarning("clipboard.sequence", "Failed to read clipboard sequence number.", ex);
+            return 0;
+        }
     }
 
     public static void CopyTextToClipboard(string text)
@@ -108,6 +177,50 @@ public static class ClipboardService
             lastError);
     }
 
+    private static MemoryStream CreateDibStream(Bitmap bitmap)
+    {
+        const int headerSize = 40;
+        int stride = bitmap.Width * 4;
+        var dib = new byte[headerSize + stride * bitmap.Height];
+        BitConverter.TryWriteBytes(dib.AsSpan(0), headerSize);
+        BitConverter.TryWriteBytes(dib.AsSpan(4), bitmap.Width);
+        BitConverter.TryWriteBytes(dib.AsSpan(8), bitmap.Height); // positive height = bottom-up rows
+        BitConverter.TryWriteBytes(dib.AsSpan(12), (short)1);
+        BitConverter.TryWriteBytes(dib.AsSpan(14), (short)32);
+        BitConverter.TryWriteBytes(dib.AsSpan(20), stride * bitmap.Height);
+
+        var rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        using var opaque = new Bitmap(bitmap.Width, bitmap.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        using (var g = Graphics.FromImage(opaque))
+        {
+            // Same backdrop Bitmap.GetHbitmap() used for transparent pixels.
+            g.Clear(Color.LightGray);
+            g.DrawImage(bitmap, rect);
+        }
+
+        var bits = opaque.LockBits(
+            rect,
+            System.Drawing.Imaging.ImageLockMode.ReadOnly,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                Marshal.Copy(
+                    bits.Scan0 + y * bits.Stride,
+                    dib,
+                    headerSize + (bitmap.Height - 1 - y) * stride,
+                    stride);
+            }
+        }
+        finally
+        {
+            opaque.UnlockBits(bits);
+        }
+
+        return new MemoryStream(dib, writable: false);
+    }
+
     private static bool ShouldIncludePngClipboardPayload(Bitmap bitmap) =>
         (long)bitmap.Width * bitmap.Height <= MaxPngClipboardPixels;
 
@@ -134,6 +247,37 @@ public static class ClipboardService
         var dataObject = new System.Windows.Forms.DataObject();
         dataObject.SetFileDropList(files);
         SetClipboardWithRetry(dataObject);
+    }
+
+    private static System.Windows.Forms.DataObject CreateImageDataObject(
+        Bitmap bitmap,
+        ImageClipboardPayload payload,
+        string? automaticClipboardToken)
+    {
+        var dataObject = new System.Windows.Forms.DataObject();
+
+        // DataFormats.Bitmap hands the clipboard a GDI bitmap that is never freed,
+        // leaking one full-size frame per copy. A DIB stream gives the same pixels
+        // and Windows synthesizes CF_BITMAP from it for apps that ask.
+        dataObject.SetData(System.Windows.Forms.DataFormats.Dib, false, CreateDibStream(bitmap));
+
+        if (payload.PngBytes is { } pngBytes && pngBytes.Array is not null && pngBytes.Count > 0)
+        {
+            dataObject.SetData(
+                "PNG",
+                false,
+                new MemoryStream(pngBytes.Array, pngBytes.Offset, pngBytes.Count, writable: false, publiclyVisible: true));
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.FilePath) && File.Exists(payload.FilePath))
+        {
+            dataObject.SetFileDropList(new StringCollection { payload.FilePath });
+        }
+
+        if (!string.IsNullOrWhiteSpace(automaticClipboardToken))
+            dataObject.SetData(AutomaticClipboardTokenFormat, false, automaticClipboardToken);
+
+        return dataObject;
     }
 
     private static void SetClipboardWithRetry(System.Windows.Forms.DataObject dataObject, int maxRetries = 3)
