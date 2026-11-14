@@ -77,7 +77,7 @@
     <ProjectReference Include="..\OddSnap.AppModel\OddSnap.AppModel.csproj" />
     <PackageReference Include="AnimatedGif" Version="1.0.5" />
     <PackageReference Include="FluentFTP" Version="54.2.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0" />
     <PackageReference Include="NAudio" Version="3.0.1" />
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
